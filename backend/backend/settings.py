@@ -40,7 +40,9 @@ INSTALLED_APPS = [
 
     "rest_framework",
     "api",                  # make sure to add  name of django-app
+    "corsheaders",          # add corsheaders
 ]
+
 
 
 MIDDLEWARE = [
@@ -51,6 +53,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+ 
+    "corsheaders.middleware.CorsMiddleware",  # add for cors
 ]
 
 ROOT_URLCONF = 'backend.urls'
@@ -129,3 +133,8 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+CORS_ALLOWED_ORIGINS = [       # add this
+    "http://localhost:5173",  # this is which frontend can access the backend to prevent this: XMLHttpRequest at 'http://127.0.0.1:8000/api/items/' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+]
