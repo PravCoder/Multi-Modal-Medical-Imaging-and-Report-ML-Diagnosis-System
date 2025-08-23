@@ -2,9 +2,17 @@
 from datasets import load_dataset
 from torchvision import transforms
 import matplotlib.pyplot as plt
+from openai import OpenAI
+from dotenv import load_dotenv
+import json
+load_dotenv()
+
+
 
 
 dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
+diseases_classes = ["No Finding", "Enlarged Cardiomediastinum", "Cardiomegaly", "Lung Opacity", "Lung Lesion", "Edema", "Consolidation", "Pneumonia", "Atelectasis", "Pneumothorax", "Pleural Effusion", "Pleural Other", "Fracture"]
+
 
 def show_basic_info(dataset):
     print(f"Features: {dataset.features}")
@@ -33,25 +41,87 @@ def show_example_image(sample):
 
 
 
-# For each exmaple passes the findings + impression column text into openAI and asks it to find the diagnosis, this will be the disease diagnosis column.
-def add_disease_diagnosis_column(sample):
-    pass
+# Given an example puts its findings + impression column text into openAI and asks it to find the diagnosis, this will be the disease diagnosis column.
+# returns dict where key is disease classifciation and value is either 0/1 if it exists or not. 
+"""
+Input:
+Lung volumes are low. This results in crowding of the bronchovascular structures. There may be mild pulmonary vascular congestion. 
+Output:
+{
+  "No Finding": 0,
+  "Enlarged Cardiomediastinum": 0,
+  "Cardiomegaly": 1,
+  "Lung Opacity": 1,
+  "Lung Lesion": 1,
+  "Edema": 1,
+  "Consolidation": 0,
+  "Pneumonia": 0,
+  "Atelectasis": 0,
+  "Pneumothorax": 0,
+  "Pleural Effusion": 0,
+  "Pleural Other": 0,
+  "Fracture": 0
+}
+"""
+def get_example_disease_classification(sample):
+    client = OpenAI()
+    diseases_classes = ["No Finding", "Enlarged Cardiomediastinum", "Cardiomegaly", "Lung Opacity", "Lung Lesion", "Edema", "Consolidation", "Pneumonia", "Atelectasis", "Pneumothorax", "Pleural Effusion", "Pleural Other", "Fracture"]
+    findings = sample["findings"]
+    impression = sample["impression"]
+    text = f"Findings: {findings}\nImpression: {impression}"
+
+    prompt = f"""
+You are a medical AI assistant. 
+Given the following radiology report on a chest X-ray, classify whether each of these diseases/observations is present (1) or absent (0), mark it as 1 if it is mentioned or implied. No Finding should be 1 only if all other diseases are 0.
+
+{', '.join(diseases_classes)}
+
+Text:
+{text}
+
+Respond ONLY as a valid JSON object with the disease names as keys and 0/1 as values. If No Finding is 1 no other disease can be 1. 
+    """
+
+    resp = client.chat.completions.create(
+        model="gpt-5", 
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    # print(resp.choices[0].message.content)
+    return json.loads(resp.choices[0].message.content)
 
 
-
+# Given an example generates the disease classifciation dict for it and converts it into a vector and returns it for a single example
+def generate_disease_vector(example):
+    label_dict = get_example_disease_classification(example)    # dict where key is disease name and value is either 0/1 if that disease exists
+    label_vector = [label_dict[d] for d in diseases_classes]
+    example["disease_classification_vector"] = label_vector     # add column for disease classification that is the label vector [0,1, 0, 1, 1,...]
+    return example
 
 def main():
     dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
-    sample = dataset[0] 
+    sample = dataset[2] 
 
-    print("\nBASIC INFO + VALIDATE IMAGES")
+    print("\n-----BASIC INFO + VALIDATE IMAGES-----:")
     # show_basic_info(dataset)
 
-    print("\nShOW IMAGE")
+    print("\n-----ShOW IMAGE-----:")
     # show_example_image(sample)
 
-    print("ADD DISEASE DIAGNOSIS COLUMN")
-    add_disease_diagnosis_column(sample)
+    print("\n-----GET DISEASE CLASSIFICATION FROM A SINGLE EXAMPLE-----:")
+    # print(f"Findings + Impression: {sample["findings"]} {sample["impression"]}")
+    # disease_label_dict = get_example_disease_classification(sample)
+    # print(disease_label_dict)
+
+    
+    print("\n-----CREATE DISEASE CLASSIFICATION COLUMN-----:")
+    # we are taking the dataset and creating the target output olumns disease-classification based on the findings+impression columns of the raw data
+    small_dataset = dataset.select([0, 1, 2])
+    small_dataset = small_dataset.map(generate_disease_vector) # apply this function generate_disease_vector() to every example in dataset, so it creates the disease_classification_vector target column
+    print(f"Example #1: {small_dataset[0]}")
+    print(f"\nExample #2: {small_dataset[1]}")
+    print(f"\nExample #3: {small_dataset[2]}")
+
 
 
 
