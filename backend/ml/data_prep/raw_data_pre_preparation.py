@@ -1,10 +1,12 @@
-# File: prepares the raw data before it is transformed in the feature pipeline. This is the pre-preparation. 
+# File: prepares the raw data before it is transformed in the feature pipeline. This is the "pre-preparation" since we do not have a single dataset for our needs. 
 from datasets import load_dataset
 from torchvision import transforms
 import matplotlib.pyplot as plt
 from openai import OpenAI
 from dotenv import load_dotenv
 import json
+import random
+from helper import DISEASES, SYMPTOMS_MAP
 load_dotenv()
 
 
@@ -41,7 +43,8 @@ def show_example_image(sample):
 
 
 
-# Given an example puts its findings + impression column text into openAI and asks it to find the diagnosis, this will be the disease diagnosis column.
+
+# Given an example puts its findings + impression column text into openAI and asks it to find the diagnosis, this will be the disease diagnosis target column.
 # returns dict where key is disease classifciation and value is either 0/1 if it exists or not. 
 """
 Input:
@@ -98,6 +101,68 @@ def generate_disease_vector(example):
     example["disease_classification_vector"] = label_vector     # add column for disease classification that is the label vector [0,1, 0, 1, 1,...]
     return example
 
+
+
+
+
+# Given an example in HF-dataset it generates the patient-detials-input column value for this example
+def generate_patient_details_single_example(example, seed=None):
+    """Generate synthetic patient details string given one dataset row."""
+    if seed is not None:
+        random.seed(seed)
+
+    # --- demographics ---
+    age = random.randint(18, 90)
+    sex = random.choice(["male", "female"])
+    view = random.choice(["AP", "PA"])
+
+    # --- risk factors ---
+    smoker = random.random() < 0.25
+    diabetes = random.random() < 0.10
+    hypertension = random.random() < 0.30
+
+    risk_factors = []
+    if smoker:
+        pack_years = random.randint(5, 40)
+        risk_factors.append(f"smoking history of {pack_years} pack years")
+    if diabetes:
+        risk_factors.append("diabetes")
+    if hypertension:
+        risk_factors.append("hypertension")
+
+    # --- disease vector must exist in example ---
+    vec = example["disease_classification_vector"]
+    present = [d for d, v in zip(DISEASES, vec) if v == 1]
+
+    # choose symptoms from map
+    symptom_pool = []
+    for d in present or ["No Finding"]:
+        symptom_pool.extend(SYMPTOMS_MAP.get(d, []))
+
+    if present == ["No Finding"]:
+        chosen_symptoms = []
+    else:
+        k = random.randint(1, min(3, len(symptom_pool)))
+        chosen_symptoms = random.sample(symptom_pool, k)
+
+    # --- build details string ---
+    parts = [f"{age} year old {sex}", f"{view} view"]
+    if risk_factors:
+        parts.append(", " + ", ".join(risk_factors))
+    if chosen_symptoms:
+        parts.append(", " + ", ".join(chosen_symptoms))
+    else:
+        parts.append(", routine evaluation")
+
+    example["patient_details"] = " ".join(parts)
+    return example
+
+# just a wrapper so we can do dataset.map(create_patient_details_column) and aply it ao all examples
+def create_patient_details_column(example):
+    return generate_patient_details_single_example(example)
+
+
+
 def main():
     dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
     sample = dataset[2] 
@@ -121,6 +186,15 @@ def main():
     print(f"Example #1: {small_dataset[0]}")
     print(f"\nExample #2: {small_dataset[1]}")
     print(f"\nExample #3: {small_dataset[2]}")
+
+
+    print("\n-----CREATE PATIENT DETAILS COLUMN-----:")
+    small_dataset = small_dataset.map(create_patient_details_column)
+    print(f"Example #1: {small_dataset[0]}")
+    print(f"\nExample #2: {small_dataset[1]}")
+    print(f"\nExample #3: {small_dataset[2]}")
+
+
 
 
 
