@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 import json
 import random
 from helper import DISEASES, SYMPTOMS_MAP
+import io, os, hashlib, uuid
+import boto3
+from PIL import Image
+from datasets import Value
 load_dotenv()
 
 
@@ -171,7 +175,7 @@ def combine_findings_and_impression_cols(example):
 
 
 
-def main():
+def tests():
     dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
     sample = dataset[2] 
 
@@ -204,14 +208,89 @@ def main():
     print(f"\nExample #3: {small_dataset[2]}")
 
 
-    print("\n-----CREATE REPORT OUTPUT COLUMN")
+    print("\n-----CREATE REPORT OUTPUT COLUMN-----:")
     # we are taking the dataset and creating the output column report
     small_dataset = small_dataset.map(combine_findings_and_impression_cols, remove_columns=["findings", "impression"])  # apply func all examples in daataset and remove cols
     print(f"Example #1: {small_dataset[0]}")        # print a whole row
 
+# tests()    - uncomment this
+
+
+
+# ---------- Below Is Code For Saving The Raw Data To Aws ----------
+
+session = boto3.Session(
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION"),
+)
+s3 = session.client("s3")
+
+
+# This takes image object from PIL library and turns it into a set of bytes representing a compressed JPEG image
+def _pil_to_jpeg_bytes(pil_img, quality=95):
+    buf = io.BytesIO()
+    pil_img.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+# This calculates a hash of a binary data
+def _digest(b: bytes):
+    return hashlib.sha256(b).hexdigest()
+
+# takes in a example-row in HF-dataset and uploads that image of that example into S3, and replaces the image column with the image's url in s3. 
+def upload_image_and_create_image_url_column_single_example(example):
+    img = example["image"]              # get the PIL.Image object in image-column of this example
+    b = _pil_to_jpeg_bytes(img, 95)
+    sha = _digest(b)[:8]                # get hash of this image
+    key = f"chest-x-ray-images/{sha}-{uuid.uuid4().hex[:6]}.jpg"    # construct unique s3-key of where this image will be saved in bucket
+
+    # uploads image to s3-bucket speciynig bucket-name, s3-object-key, body which is binary image to be uploaded
+    s3.put_object(
+        Bucket=os.getenv("AWS_S3_BUCKET_NAME"), Key=key, Body=b,
+        ContentType="image/jpeg",
+        ServerSideEncryption="AES256"    # or 'aws:kms' + SSEKMSKeyId=...
+    )
+
+    # replaces image column with image-url in s3-bucket which contains the object s3-key
+    example["image_url"] = f"s3://{os.getenv("AWS_S3_BUCKET_NAME")}/{key}"
+    return example
+
+
+def prepare_and_save_raw_data():
+    dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
+    small_dataset = dataset.select([0])
+    small_dataset = small_dataset.map(upload_image_and_create_image_url_column_single_example)
+    # remove the old image column because it was of type image object, and add new col image-url which is the location where the image is stored
+    small_dataset = small_dataset.map(upload_image_and_create_image_url_column_single_example, remove_columns=["image"])
+    print(f"Single row: {small_dataset[0]}")
+
+prepare_and_save_raw_data()
 
 
 
 
 
-main()
+
+
+
+
+"""
+Sample Output of Tests without Running:
+
+-----CREATE DISEASE CLASSIFICATION OUTPUT COLUMN-----:
+Example #1: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x129F8FD90>, 'findings': 'The lungs are clear of focal consolidation, pleural effusion or pneumothorax. The heart size is normal. The mediastinal contours are normal. Multiple surgical clips project over the left breast, and old left rib fractures are noted. ', 'impression': 'No acute cardiopulmonary process.', 'disease_classification_vector': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]}
+
+Example #2: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x129F8FD90>, 'findings': 'Lung volumes remain low. There are innumerable bilateral scattered small pulmonary nodules which are better demonstrated on recent CT. Mild pulmonary vascular congestion is stable. The cardiomediastinal silhouette and hilar contours are unchanged. Small pleural effusion in the right middle fissure is new. There is no new focal opacity to suggest pneumonia. There is no pneumothorax. ', 'impression': 'Low lung volumes and mild pulmonary vascular congestion is unchanged. New small right fissural pleural effusion. No new focal opacities to suggest pneumonia.', 'disease_classification_vector': [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0]}
+
+Example #3: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x12A21A9E0>, 'findings': 'Lung volumes are low. This results in crowding of the bronchovascular structures. There may be mild pulmonary vascular congestion. The heart size is borderline enlarged. The mediastinal and hilar contours are relatively unremarkable. Innumerable nodules are demonstrated in both lungs, more pronounced in the left upper and lower lung fields compatible with metastatic disease. No new focal consolidation, pleural effusion or pneumothorax is seen, with chronic elevation of right hemidiaphragm again seen. The patient is status post right lower lobectomy. Rib deformities within the right hemithorax is compatible with prior postsurgical changes. ', 'impression': 'Innumerable pulmonary metastases. Possible mild pulmonary vascular congestion. Low lung volumes.', 'disease_classification_vector': [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]}
+Example #1: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x12A21AB10>, 'findings': 'The lungs are clear of focal consolidation, pleural effusion or pneumothorax. The heart size is normal. The mediastinal contours are normal. Multiple surgical clips project over the left breast, and old left rib fractures are noted. ', 'impression': 'No acute cardiopulmonary process.', 'disease_classification_vector': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], 'patient_details': '72 year old male PA view , tenderness, pain with deep breathing'}
+
+Example #2: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x12A21AB10>, 'findings': 'Lung volumes remain low. There are innumerable bilateral scattered small pulmonary nodules which are better demonstrated on recent CT. Mild pulmonary vascular congestion is stable. The cardiomediastinal silhouette and hilar contours are unchanged. Small pleural effusion in the right middle fissure is new. There is no new focal opacity to suggest pneumonia. There is no pneumothorax. ', 'impression': 'Low lung volumes and mild pulmonary vascular congestion is unchanged. New small right fissural pleural effusion. No new focal opacities to suggest pneumonia.', 'disease_classification_vector': [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0], 'patient_details': '70 year old female PA view , weight loss, nighttime breathlessness'}
+
+Example #3: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x12A21AB10>, 'findings': 'Lung volumes are low. This results in crowding of the bronchovascular structures. There may be mild pulmonary vascular congestion. The heart size is borderline enlarged. The mediastinal and hilar contours are relatively unremarkable. Innumerable nodules are demonstrated in both lungs, more pronounced in the left upper and lower lung fields compatible with metastatic disease. No new focal consolidation, pleural effusion or pneumothorax is seen, with chronic elevation of right hemidiaphragm again seen. The patient is status post right lower lobectomy. Rib deformities within the right hemithorax is compatible with prior postsurgical changes. ', 'impression': 'Innumerable pulmonary metastases. Possible mild pulmonary vascular congestion. Low lung volumes.', 'disease_classification_vector': [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0], 'patient_details': '55 year old female AP view , hypertension , leg swelling'}
+
+-----CREATE REPORT OUTPUT COLUMN-----:
+Map: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 3/3 [00:00<00:00, 430.97 examples/s]
+Example #1: {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=512x512 at 0x12A21A9E0>, 'disease_classification_vector': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], 'patient_details': '72 year old male PA view , tenderness, pain with deep breathing', 'report': 'The lungs are clear of focal consolidation, pleural effusion or pneumothorax. The heart size is normal. The mediastinal contours are normal. Multiple surgical clips project over the left breast, and old left rib fractures are noted. No acute cardiopulmonary process.'}
+
+"""
