@@ -256,15 +256,38 @@ def upload_image_and_create_image_url_column_single_example(example):
     return example
 
 
-def prepare_and_save_raw_data():
+def save_dataset_as_parquet_in_s3(dataset):
+    df = dataset.to_pandas()
+    # (Optional) enforce a clean schema
+    # df = df[["image", "patient_details", "report", "disease_classification_vector", ...]]
+
+    parquet_key = "raw_data/dataset.parquet"
+    df.to_parquet(
+        f"s3://{os.getenv("AWS_S3_BUCKET_NAME")}/{parquet_key}",
+        index=False,
+        storage_options={"key": os.getenv("AWS_ACCESS_KEY_ID"),
+                        "secret": os.getenv("AWS_SECRET_ACCESS_KEY"),
+                        "client_kwargs": {"region_name": os.getenv("AWS_REGION")}}
+    )
+    print("Wrote:", f"s3://{os.getenv("AWS_S3_BUCKET_NAME")}/{parquet_key}")
+
+
+def prepare_tests():
+    # note these tests are before the pre-preparation of raw data
+    print("\n----- SAVE IMAGES IN S3 & CREATE IMAGE-URL COLUMN -----:")
     dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
     small_dataset = dataset.select([0])
     small_dataset = small_dataset.map(upload_image_and_create_image_url_column_single_example)
     # remove the old image column because it was of type image object, and add new col image-url which is the location where the image is stored
     small_dataset = small_dataset.map(upload_image_and_create_image_url_column_single_example, remove_columns=["image"])
-    print(f"Single row: {small_dataset[0]}")
+    print(f"Single row: {small_dataset[0]}")    # make sure image-url col is there
 
-prepare_and_save_raw_data()
+
+    print("\n----- SAVE DATASET AS PARQUET IN S3 -----:")
+    save_dataset_as_parquet_in_s3(small_dataset)    # you can view parquet-file in s3
+    
+prepare_tests()
+# prepare_and_save_raw_data()
 
 
 
