@@ -93,13 +93,13 @@ Respond ONLY as a valid JSON object with the disease names as keys and 0/1 as va
     # print(resp.choices[0].message.content)
     return json.loads(resp.choices[0].message.content)
 
-
 # Given an example generates the disease classifciation dict for it and converts it into a vector and returns it for a single example
 def generate_disease_vector(example):
     label_dict = get_example_disease_classification(example)    # dict where key is disease name and value is either 0/1 if that disease exists
     label_vector = [label_dict[d] for d in diseases_classes]
     example["disease_classification_vector"] = label_vector     # add column for disease classification that is the label vector [0,1, 0, 1, 1,...]
     return example
+
 
 
 
@@ -163,6 +163,14 @@ def create_patient_details_column(example):
 
 
 
+
+# given an example-row in HF-dataset just returns concat of findings +impression column, which is the value of the report output target column for this eample
+def combine_findings_and_impression_cols(example):
+    return {"report": example["findings"] + example["impression"]}
+
+
+
+
 def main():
     dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train")
     sample = dataset[2] 
@@ -179,8 +187,8 @@ def main():
     # print(disease_label_dict)
 
     
-    print("\n-----CREATE DISEASE CLASSIFICATION COLUMN-----:")
-    # we are taking the dataset and creating the target output olumns disease-classification based on the findings+impression columns of the raw data
+    print("\n-----CREATE DISEASE CLASSIFICATION OUTPUT COLUMN-----:")
+    # we are taking the dataset and creating the target output column disease-classification based on the findings+impression columns of the raw data
     small_dataset = dataset.select([0, 1, 2])
     small_dataset = small_dataset.map(generate_disease_vector) # apply this function generate_disease_vector() to every example in dataset, so it creates the disease_classification_vector target column
     print(f"Example #1: {small_dataset[0]}")
@@ -188,12 +196,18 @@ def main():
     print(f"\nExample #3: {small_dataset[2]}")
 
 
-    print("\n-----CREATE PATIENT DETAILS COLUMN-----:")
-    small_dataset = small_dataset.map(create_patient_details_column)
+    # print("\n-----CREATE PATIENT DETAILS INPUT COLUMN-----:")
+    # we are taking the dataset and creating the input column patient-detials using arule-based function
+    small_dataset = small_dataset.map(create_patient_details_column)    # make sure this is same dataset as above with disease-classification column else it wont work, apply func to all examples in dataset
     print(f"Example #1: {small_dataset[0]}")
     print(f"\nExample #2: {small_dataset[1]}")
     print(f"\nExample #3: {small_dataset[2]}")
 
+
+    print("\n-----CREATE REPORT OUTPUT COLUMN")
+    # we are taking the dataset and creating the output column report
+    small_dataset = small_dataset.map(combine_findings_and_impression_cols, remove_columns=["findings", "impression"])  # apply func all examples in daataset and remove cols
+    print(f"Example #1: {small_dataset[0]}")        # print a whole row
 
 
 
