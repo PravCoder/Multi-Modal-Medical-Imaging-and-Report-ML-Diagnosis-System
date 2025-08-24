@@ -200,8 +200,8 @@ def tests():
     print(f"\nExample #3: {small_dataset[2]}")
 
 
-    # print("\n-----CREATE PATIENT DETAILS INPUT COLUMN-----:")
-    # we are taking the dataset and creating the input column patient-detials using arule-based function
+    print("\n-----CREATE PATIENT DETAILS INPUT COLUMN-----:")
+    # we are taking the dataset and creating the input column patient-detials using rule-based function
     small_dataset = small_dataset.map(create_patient_details_column)    # make sure this is same dataset as above with disease-classification column else it wont work, apply func to all examples in dataset
     print(f"Example #1: {small_dataset[0]}")
     print(f"\nExample #2: {small_dataset[1]}")
@@ -255,11 +255,10 @@ def upload_image_and_create_image_url_column_single_example(example):
     example["image_url"] = f"s3://{os.getenv("AWS_S3_BUCKET_NAME")}/{key}"
     return example
 
-
+# takes in HF-ddataset after all pre-preparation and converts it into parquet-file and uploads it into s3-bucket based on env-vars
 def save_dataset_as_parquet_in_s3(dataset):
     df = dataset.to_pandas()
-    # (Optional) enforce a clean schema
-    # df = df[["image", "patient_details", "report", "disease_classification_vector", ...]]
+
 
     parquet_key = "raw_data/dataset.parquet"
     df.to_parquet(
@@ -286,8 +285,35 @@ def prepare_tests():
     print("\n----- SAVE DATASET AS PARQUET IN S3 -----:")
     save_dataset_as_parquet_in_s3(small_dataset)    # you can view parquet-file in s3
     
-prepare_tests()
-# prepare_and_save_raw_data()
+# prepare_tests()
+
+
+
+
+# MAIN-FUNC: goes through all pre-preparation transformation steps of raw data
+def prepare_and_save_raw_data():
+    # load dataset from hugging-face
+    # BUG: its only uploading 50
+    dataset = load_dataset("itsanmolgupta/mimic-cxr-dataset", split="train[:100]")  # define how many rows-example you want to load "train[:x]"
+
+    # create outputc-column disease-classification-vector by feeding findings+impresssion cols of the raw data into openAI to classify each example, map() means apply the given function to every example in dataset
+    dataset = dataset.map(generate_disease_vector)
+
+    # create input-column patient-details synthetically by using rule-based function
+    dataset = dataset.map(create_patient_details_column) 
+
+    # create report output column by just combining findings+impression columns, and removing them
+    dataset = dataset.map(combine_findings_and_impression_cols, remove_columns=["findings", "impression"]) 
+
+    # go through each example and upload its image to s2-bucket and create new image-url column for it, and remove old image
+    dataset = dataset.map(upload_image_and_create_image_url_column_single_example, remove_columns=["image"])
+
+    # upload the raw-data as a parquet file to s3, with image-url column and input-output columns
+    save_dataset_as_parquet_in_s3(dataset)  
+
+    print("DONE...Uploading Raw Data to S3.")   # view uploaded data in a online parquet viwer just download it from s3
+
+prepare_and_save_raw_data()
 
 
 
