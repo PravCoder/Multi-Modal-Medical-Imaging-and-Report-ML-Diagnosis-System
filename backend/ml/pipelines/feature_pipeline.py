@@ -4,6 +4,7 @@ import numpy as np
 import json
 import hopsworks
 from dotenv import load_dotenv
+from helper import print_clean_df
 load_dotenv()
 
 
@@ -11,19 +12,6 @@ load_dotenv()
 RAW_DATA_COLUMNS = ["image_url", "patient_details", "disease_classification_vector", "report"]
 
 # Helper functions
-def print_clean_df(df, num_rows=5, display_head=True, str_length=15):
-    display_df = df.copy()
-    # Get the columns that contain string data
-    str_cols = display_df.select_dtypes(include=['object']).columns
-    # Truncate string columns
-    for col in str_cols:
-        display_df[col] = display_df[col].astype(str).str.slice(0, str_length) + \
-                          display_df[col].astype(str).str.len().gt(str_length).apply(lambda x: '...' if x else '')
-    # Print the head or tail
-    if display_head:
-        print(display_df.head(num_rows).to_string())
-    else:
-        print(display_df.tail(num_rows).to_string())
 
 
 
@@ -55,6 +43,8 @@ def load_raw_data(s3_url):
     raw_data_df = enforce_raw_data_columns(raw_data_df)
     return raw_data_df
 
+
+FEATURE_GROUP_NAME="cxr_features"
 # Save raw-data-cleaned df in hopsworks feature-store
 def save_cleaned_raw_data_to_feature_store(cleaned_df):
     cleaned_df["event_time"] = pd.Timestamp.now()   # just add an even-time column for when this event happened which is current time
@@ -65,15 +55,15 @@ def save_cleaned_raw_data_to_feature_store(cleaned_df):
 
     # this either gets or creates a feature group which is a subset of a feature-store, feature-group called cxr_features
     fg = fs.get_or_create_feature_group(
-        name="cxr_features",
+        name=FEATURE_GROUP_NAME,            # the feature group cxr-features is the dataframe that has both cleaned-features/labels in feature stored
         version=1,
         primary_key=["image_url"],
         event_time="event_time",
         online_enabled=True,   
     )
 
-    # update existing feature-group with new data from thie given dataframe, 
-    fg.insert(cleaned_df, write_options={"wait_for_job": True})
+    # update existing feature-group with new data from thie given dataframe, false if you dont want to stop in terminal and want to return to code if job is not done.
+    fg.insert(cleaned_df, write_options={"wait_for_job": False})
 
 
 

@@ -43,3 +43,5 @@ def _infer_hints(text):
     if re.search(r'\bdyspn(ea|o(e)?a)|shortness of breath|sob\b', t): hints.add("dyspnea")
     if re.search(r'\bedema|effusion|orthopnea\b', t): hints.add("leg swelling")
     return hints
+
+
