@@ -1,7 +1,8 @@
-# FEATURE PIPELINE: transforms raw data into ready-to-train features/labels saved in feature store
+# FEATURE PIPELINE: transforms raw data into ready-to-train features/labels saved in feature store, this just cleans the raw data and saves it in our feature store hopsworks, the training pipeline transforms that into ready-to-train tensors
 import pandas as pd
 import numpy as np
 import json
+import hopsworks
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -54,13 +55,38 @@ def load_raw_data(s3_url):
     raw_data_df = enforce_raw_data_columns(raw_data_df)
     return raw_data_df
 
+# Save raw-data-cleaned df in hopsworks feature-store
+def save_cleaned_raw_data_to_feature_store(cleaned_df):
+    cleaned_df["event_time"] = pd.Timestamp.now()   # just add an even-time column for when this event happened which is current time
+    project = hopsworks.login()     # connects local python environment to hopsworks projects
+
+    # gets reference to feature store assoicated with the hopsworks project medical_ml_project
+    fs = project.get_feature_store()        
+
+    # this either gets or creates a feature group which is a subset of a feature-store, feature-group called cxr_features
+    fg = fs.get_or_create_feature_group(
+        name="cxr_features",
+        version=1,
+        primary_key=["image_url"],
+        event_time="event_time",
+        online_enabled=True,   
+    )
+
+    # update existing feature-group with new data from thie given dataframe, 
+    fg.insert(cleaned_df, write_options={"wait_for_job": True})
+
 
 
 def tests():
-    raw_data_df = load_raw_data("s3://medical-ml-proj-bucket/raw_data/dataset.parquet")       # make sure this url of where the raw data is in s3 is correct
-
+    
     print("\n---------LOAD SHOW RAW DATA:---------")
-    print_clean_df(raw_data_df, num_rows=3)
+    cleaned_raw_data_df = load_raw_data("s3://medical-ml-proj-bucket/raw_data/dataset.parquet")       # make sure this url of where the raw data is in s3 is correct
+    print_clean_df(cleaned_raw_data_df, num_rows=3)
+    # this already does some cleaning in the load func, but most of the transformation is done in training-pipeline before training into tensors thats why we just pass the cleaned-raw-data-df into save func
+    print(f"Number of rows/examples & features/labels : {cleaned_raw_data_df.shape}")
+
+    print("\n---------SAVE CLEANED RAW DATA TO HOPSWORKS FEATURE STORE---------")
+    save_cleaned_raw_data_to_feature_store(cleaned_raw_data_df)
 
 
 tests()
