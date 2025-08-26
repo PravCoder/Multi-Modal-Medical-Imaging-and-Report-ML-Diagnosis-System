@@ -2,7 +2,7 @@
 import hopsworks
 import pandas as pd
 import numpy as np
-import json
+import json, os
 from helper import print_clean_df
 import warnings
 import io
@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn            # neural network layers modules
 import torchvision.models as tv  # ready-made CNN backbones (ResNet, etc
 import torchvision.transforms as T
+from torch.utils.data import Dataset, DataLoader    # this is how we do stack the batched tensors in training-inference pipe
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -66,10 +67,10 @@ def parse_s3_url(url):
 # Image Encoder
 # ===========================================================
 
-# this is a torchvision transform pipeline that accepts a PIL Image object
-# it returns a torch.FloatTensor of shape [3, IMG_SIZE, IMG_SIZE] for three color channels because ImageNet is like that. 
-# this is applied to each image individually and stacked the batch shape is [B, 3, IMG_SIZE, IMG_SIZE]
-image_transfom = T.Compose([
+# this is a torchvision transform-pipeline that accepts a PIL Image object
+# it returns a torch.FloatTensor of shape [3, IMG_SIZE, IMG_SIZE] or [3, H, W] for three color channels because ImageNet is like that. 
+# this is applied to each image individually and stacked the batch shape is [B, 3, IMG_SIZE, IMG_SIZE], [B, 3, H, W], where B is the batch size, 3 is color channels *** important
+image_transfom_into_tensor = T.Compose([
     T.Resize(256, antialias=True),    # takes in pil-image, resizes so shorter side is 256-pixels
     T.CenterCrop(IMG_SIZE),           # crops the center square out of the image (224, 224, C)
     T.ToTensor(),                     # converts pil -> torch.FloatTensor, reorders dims to channel dim first [C, H, W], If grayscale input → [1, 224, 224]. If RGB input → [3, 224, 224], scale pixel values to [0,1]
@@ -77,6 +78,39 @@ image_transfom = T.Compose([
     T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]), # normalizes each channel seperately
     # output: [3, 224, 224] tensor representing image to be fed into cnn-image-encoder, 
 ])
+
+# this is neccesary for the cxr-cnn-dataset-obj
+def construct_input_label_pairs_for_image_encoder_dataset(df):
+    parsed = [parse_s3_url(url) for url in df["image_url"].tolist()]     # get all image-url-strings in iamge-url col of df in order as list, parse the url correclty
+    img_keys = [k for _, k in parsed]  
+
+    y_labels = [np.asarray(v, dtype=np.float32) for v in df["disease_classification_vector"].tolist()]  # for every element in disease-classification-col add it to this list
+    return img_keys, y_labels       # they are pairs because they are in order and hold same index in the two lists
+
+
+# create a dataset object for all the images transformed and stacked to be fed into cnn encoder
+class CXR_ImageDataset(Dataset):
+    def __init__(self, img_s3_keys_input, bucket, labels=None, image_transform=None):
+        self.img_s3_keys_input = img_s3_keys_input      # given the keys of all the images in s3-bucket stacked, this our input for this dataset
+        self.bucket = bucket                # given s3-bucket name of where iamges are stored
+        self.labels = labels                # given all the disease-classification-vectors for each examples tacked, this our labels for this dataset
+        self.image_transform = image_transform      # given the pytorch-transform-pipeline-func that converts each image into the correct tensor form
+
+    def __len__(self):  
+        assert(len(self.img_s3_keys_input) == len(self.labels))            
+        return len(self.img_s3_keys_input)  # number of examples in dataset
+
+    def __getitem__(self, i):
+        # get the image-bytes-object from s3-storage
+        img_bytes = get_image_from_s3(self.bucket, self.img_s3_keys_input[i])   
+        # convert image-bytes-object to pil-image 
+        img = Image.open(io.BytesIO(img_bytes))     
+        # use image-transform func we defined to convert pil-image-obj into tensor of shape [3, H, W] or [3, IMG_SIZE, IMG_SIZE], this is the input for example-i in this image-encoder-dataset
+        x = self.image_transform(img)             
+        # convert the disease-classification into torch-float-tensor for example-i
+        y = torch.tensor(self.labels[i], dtype=torch.float32) 
+        # return the (x,y) input-label pair for this example-i
+        return x, y     
 
 
 # ===========================================================
@@ -94,8 +128,8 @@ image_transfom = T.Compose([
 
 def training_tests():
     print("----------LOAD FEATURES/LABELS FROM FEATURE STORE HOPSWORKS---------")
-    # features_labels_df = load_features_labels_from_feature_store()
-    # print_clean_df(features_labels_df, num_rows=10)
+    features_labels_df = load_features_labels_from_feature_store()
+    print_clean_df(features_labels_df, num_rows=10)
 
 
     print("---------GET IMAGE FROM S3 AS BYTES OBJECT---------")
@@ -104,11 +138,25 @@ def training_tests():
     image_bytes_obj = get_image_from_s3(bucket, key)
     print(f"image bytes object: {image_bytes_obj[0:5]}")
 
-    print("----------IMAGE ENCODER: IMAGE TRANSFORM TEST SINGLE IMAGE")
-    pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert iamge-bytes intopil-img-obj
-    tensor_img = image_transfom(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
+    print("----------IMAGE ENCODER: IMAGE TRANSFORM TEST SINGLE IMAGE----------")
+    pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert image-bytes into pil-img-obj
+    tensor_img = image_transfom_into_tensor(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
     print(tensor_img.shape)  # should be [3, 224, 224], [3, img_sze, img_sze], check image-size constant
     print(tensor_img.dtype) 
+
+    print("----------IMAGE ENCODER: CONSTRUCT IMAGE-CXR-TORCH-DATASET----------")
+    img_s3_key_inputs, disease_classification_vectors_labels = construct_input_label_pairs_for_image_encoder_dataset(features_labels_df)    # pass in df we loaded from feature-store
+    assert(len(img_s3_key_inputs) == len(disease_classification_vectors_labels))
+    dataset = CXR_ImageDataset(img_s3_keys_input=img_s3_key_inputs, bucket=os.getenv("AWS_S3_BUCKET_NAME"), labels=disease_classification_vectors_labels, image_transform=image_transfom_into_tensor)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)   # create dataloader object
+    print(f"dataset length: {len(dataset)}")
+    
+    for batch_imgs, batch_labels in dataloader:     # iterate for all batches in dataloader, it calls __getitem__ & __len__ in the abckground while doing this to fetch examples by index
+        print(f"batch img input shape: {batch_imgs.shape}")  # [32, 3, 224, 224], 32=batch-sizes, [B, 3, H, W]
+        print(f"batch disease-vec label shape: {batch_labels.shape}")  # [32, 14], [batch, disease-classification]
+        print(f"img one example shape: {batch_imgs[0].shape}")          # [3, 244, 244]
+        print(f"disease-vec one example value: {batch_labels[0]}")
+        break
 
 
 
