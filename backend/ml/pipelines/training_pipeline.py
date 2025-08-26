@@ -4,12 +4,14 @@ import pandas as pd
 import numpy as np
 import json
 from helper import print_clean_df
-import torch
 import warnings
-# import tensorflow as tf
 import io
-import os
+from PIL import Image
 import boto3
+import torch
+import torch.nn as nn            # neural network layers modules
+import torchvision.models as tv  # ready-made CNN backbones (ResNet, etc
+import torchvision.transforms as T
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -21,6 +23,7 @@ HOPS_FEATURE_GROUP_NAME="cxr_features"      # name of feature-group in feature-s
 VERSION = 1
 INPUT_COLS = []
 OUTPUT_COLS = []
+IMG_SIZE = 224
 s3 = boto3.client("s3")
 
 
@@ -59,9 +62,30 @@ def parse_s3_url(url):
     bucket, key = no_schema.split("/", 1)
     return bucket, key
 
-# Transform them to be inputted into models
+# ===========================================================
+# Image Encoder
+# ===========================================================
 
-# Create models
+# this is a torchvision transform pipeline that accepts a PIL Image object
+# it returns a torch.FloatTensor of shape [3, IMG_SIZE, IMG_SIZE] for three color channels because ImageNet is like that. 
+# this is applied to each image individually and stacked the batch shape is [B, 3, IMG_SIZE, IMG_SIZE]
+image_transfom = T.Compose([
+    T.Resize(256, antialias=True),    # takes in pil-image, resizes so shorter side is 256-pixels
+    T.CenterCrop(IMG_SIZE),           # crops the center square out of the image (224, 224, C)
+    T.ToTensor(),                     # converts pil -> torch.FloatTensor, reorders dims to channel dim first [C, H, W], If grayscale input → [1, 224, 224]. If RGB input → [3, 224, 224], scale pixel values to [0,1]
+    T.Lambda(lambda x: x.repeat(3,1,1) if x.size(0) == 1 else x),  # ensures 3 channels for colors, If input has C=1 (grayscale), repeats that channel 3 times: [1,224,224] → [3,224,224]. If already C=3, leaves unchanged.
+    T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]), # normalizes each channel seperately
+    # output: [3, 224, 224] tensor representing image to be fed into cnn-image-encoder, 
+])
+
+
+# ===========================================================
+# Text Encoder
+# ===========================================================
+
+# ===========================================================
+# Fusion Model
+# ===========================================================
 
 # Train
 
@@ -79,6 +103,13 @@ def training_tests():
     bucket, key = parse_s3_url(s3_image_url_example)
     image_bytes_obj = get_image_from_s3(bucket, key)
     print(f"image bytes object: {image_bytes_obj[0:5]}")
+
+    print("----------IMAGE ENCODER: IMAGE TRANSFORM TEST SINGLE IMAGE")
+    pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert iamge-bytes intopil-img-obj
+    tensor_img = image_transfom(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
+    print(tensor_img.shape)  # should be [3, 224, 224], [3, img_sze, img_sze], check image-size constant
+    print(tensor_img.dtype) 
+
 
 
 
