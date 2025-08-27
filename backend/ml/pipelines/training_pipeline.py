@@ -192,6 +192,47 @@ class ImageEncoderCNN(nn.Module):
         # keep warm-up classifier-head in training mode as well
         if self.classifier is not None:
             self.classifier.train()
+    
+
+    # Builds an optimizer with sensible param groups for the current phase
+    # phase=1, then only train heads (project + optional classifer)
+    # phase=2, discriminative LRs: smaller for backbone, larger for heads
+    # weight-decay: is for l2-style regularization, helps prevent overfitting
+    # optimizer_cls:  is torch object, specifies which optimizer algo to build.
+    def build_optimizer(self, phase, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2, optimizer_cls=torch.optim.AdamW):
+        
+        # if its phase 1 we only build an optimizer that will only update the heads
+        if phase == 1:
+            # params is a list of parameter groups, where the first group is the projection-head-params trained to with learning-rate lr-head, add this dict-group to params
+            params = [{"params": self.proj.parameters(), "lr": lr_head}]
+            # the second group is the classifier-head-params added to params-list
+            if self.classifier is not None:
+                params.append({"params":self.classifier.parameters(), "lr":lr_head})
+
+            # create and return the torch-optimizer using those parameters groups for the 2 heads
+            # torch optimizer only trains parameter groups we give it and since we didnt give it backbone-params it wont train backbone
+            return optimizer_cls(params, weight_decay=weight_decay)
+
+        # if its phase 2 (fine-tuning-mode) then we build an optimizer that will update heads + backbone
+        elif phase == 2:
+            params = []     # start with empty list of parameter groups
+
+            # for every parmeter in backbone-model if it requires-gra=true then only add it to bb-params (supports partial unfreeze)
+            bb_params = [p for p in self.backbone.parameters() if p.requires_grad]
+            # if backbone-params has anything in it then add it as a parameter group to params-list
+            if bb_params:
+                params.append({"params": bb_params, "lr":lr_backbone})
+
+            # always train the projection-head so add its params as a parameter group
+            params.append({"params":self.proj.parameters(), "lr":lr_head}) 
+            # always train the classifier-head so add itts params as a parameter group to params list
+            if self.classifier is not None:
+                params.append({"params": self.classifier.parameters(), "lr": lr_head})
+
+            # create and return torch-optimizer using parameter-groups for the 2 heads, and parameter-group for backbone
+            return optimizer_cls(params, weight_decay=weight_decay)
+
+
 
 
 
@@ -249,6 +290,7 @@ def training_tests():
 
     # Phase 1: freeze backbone, train heads
     print("=====Phase #1=====")
+    optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
     model.freeze_backbone()
 
     # Phase 2: unfreeze + discriminative lrs
