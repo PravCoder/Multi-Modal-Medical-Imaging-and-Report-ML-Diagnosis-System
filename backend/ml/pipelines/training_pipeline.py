@@ -132,10 +132,10 @@ class ImageEncoderCNN(nn.Module):
 
         self.pretrained_weights = ResNet50_Weights.IMAGENET1K_V2    # the weights of the backbone-cnn
         self.backbone = None   # is the pre-tranied-model's feature extractor with the final classification layer removed
-        self.proj = None       # is the projection head tha maps the backbone-model's feature vector to the desired embedding size d_img
+        self.proj = None       # is the projection head thar maps the backbone-model's feature vector to the desired embedding size d_img
         self.classifier = None
         self.is_backbone_frozen = False
-        self.load_pretrained_backbone()
+        self.load_pretrained_backbone()     # call this when object gets created
     
     def load_pretrained_backbone(self):
         if self.backbone_name.lower() == "resnet50":
@@ -157,10 +157,24 @@ class ImageEncoderCNN(nn.Module):
             # create linear classifier head that sits on top of the image embedding, it maps embedding (B x d_img) to (B x n_disease_Classes)
             self.classifier = nn.Linear(self.d_img,self. n_disease_classes) 
 
-
         # track wheather backbone is frozen
         self.is_backbone_frozen = False
 
+    # PHASE 1: freeze CNN weights and lock BN/dropotu stats. Train only new heads projection + optional classifer
+    def freeze_backbone(self):
+        # iterate every parameter tensor in pre-trained-backbone-cnn and tunrs off gradient tracking so no grads are computed for these tensors and the optimizer will not update them.
+        for p in self.backbone.parameters():    # this is what is freezing the backbone 
+            p.requires_grad = False
+        self.is_backbone_frozen = True  # sets flag so toher methods know backbone is frozen
+
+        self.backbone.eval() # puts backbone is evaluation mode disables dropout and stops batchnorm from updating running mean.
+
+        # ensures projection head is in training mode, heads still train during phase-1-freeze
+        self.proj.train()
+
+        # also train the classifer head put in training mode too so it learns during phase-1, train() does not train by itself it just puts it in that mode
+        if self.classifier is not None:
+            self.classifier.train()
 
 
 
@@ -215,6 +229,9 @@ def training_tests():
     device = torch.device("cpu")
     model = ImageEncoderCNN(backbone_name="resnet50", d_img=1024, n_disease_classes=13).to(device)
     criterion = BCEWithLogitsLoss() 
+
+    # Phase 1: freeze backbone, train heads
+    model.freeze_backbone()
 
 
 
