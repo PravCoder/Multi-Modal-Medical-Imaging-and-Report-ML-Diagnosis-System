@@ -162,17 +162,34 @@ class ImageEncoderCNN(nn.Module):
 
     # PHASE 1: freeze CNN weights and lock BN/dropotu stats. Train only new heads projection + optional classifer
     def freeze_backbone(self):
-        # iterate every parameter tensor in pre-trained-backbone-cnn and tunrs off gradient tracking so no grads are computed for these tensors and the optimizer will not update them.
+        # iterate every parameters tensors in pre-trained-backbone-cnn and tunrs off gradient tracking so no grads are computed for these tensors and the optimizer will not update them.
         for p in self.backbone.parameters():    # this is what is freezing the backbone 
             p.requires_grad = False
-        self.is_backbone_frozen = True  # sets flag so toher methods know backbone is frozen
+        self.is_backbone_frozen = True  # sets flag so other methods know backbone is frozen
 
         self.backbone.eval() # puts backbone is evaluation mode disables dropout and stops batchnorm from updating running mean.
 
-        # ensures projection head is in training mode, heads still train during phase-1-freeze
+        # ensures projection head is in training mode, heads still train duringi phase-1-freeze
         self.proj.train()
 
         # also train the classifer head put in training mode too so it learns during phase-1, train() does not train by itself it just puts it in that mode
+        if self.classifier is not None:
+            self.classifier.train()
+
+    # PHASE 2: unfreeze CNN for fine-tuning. Use smaller lr for backbone
+    def unfreeze_backbone(self):
+        # iterate all paraemters tensors in backbone-model and turn gradient tracking back on, so they backbones weights can recieve gradients and be updated by the optimizer
+        for p in self.backbone.parameters():
+            p.requires_grad = True
+        self.is_backbone_frozen = False     # set so backbone is not frozen anymore
+
+        # put pre-trained-backbone in training mode so batch-norm updates running mean.var using your data distribution, dropout is enabled is present
+        self.backbone.train()
+
+        # ensure projection-head is in training mode, this doesnt itself train
+        self.proj.train()
+
+        # keep warm-up classifier-head in training mode as well
         if self.classifier is not None:
             self.classifier.train()
 
@@ -231,8 +248,12 @@ def training_tests():
     criterion = BCEWithLogitsLoss() 
 
     # Phase 1: freeze backbone, train heads
+    print("=====Phase #1=====")
     model.freeze_backbone()
 
+    # Phase 2: unfreeze + discriminative lrs
+    print("=====Phase #2=====")
+    model.unfreeze_backbone()
 
 
 
