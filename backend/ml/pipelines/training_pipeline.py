@@ -13,6 +13,8 @@ import torch.nn as nn            # neural network layers modules
 import torchvision.models as tv  # ready-made CNN backbones (ResNet, etc
 import torchvision.transforms as T
 from torch.utils.data import Dataset, DataLoader    # this is how we do stack the batched tensors in training-inference pipe
+from torchvision.models import ResNet50_Weights     # backbone weights
+from torch.nn import BCEWithLogitsLoss
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -59,7 +61,7 @@ def get_image_from_s3(bucket, key):  # gets the image from s3 given bucket-name 
 # given a s3-url of an image gets the bucket and key of where that image lives, so we can get that image file
 def parse_s3_url(url):
     assert url.startswith("s3://")
-    no_schema = url[5:]
+    no_schema = url[5:]     # removes the s3://
     bucket, key = no_schema.split("/", 1)
     return bucket, key
 
@@ -111,6 +113,57 @@ class CXR_ImageDataset(Dataset):
         y = torch.tensor(self.labels[i], dtype=torch.float32) 
         # return the (x,y) input-label pair for this example-i
         return x, y     
+    
+
+# torch module that represents a CNN-image-encoder that takes in a image & outputs a embedding that represents that image
+# backbone of cnn: is itself a deep-cnn typically pre-trained on massive datasets, it process input data like images through multiple convolutional and pooling layers to generate rich, hierarchical feature maps.
+
+class ImageEncoderCNN(nn.Module):
+    
+    def __init__(self, backbone_name="resnet50", d_img=1024, n_disease_classes=13, use_warmup_classifier=True, pretrained_weights=ResNet50_Weights.IMAGENET1K_V2):
+        super().__init__()  # inherit from parent torch module
+
+        self.backbone_name = backbone_name      # string name of backbone pre-trained cnn model
+        self.d_img = d_img         # output embedding size, dimenstioanlity of the image embedding vector that comes out of the cnn image encoder
+        self.n_disease_classes = n_disease_classes      # number of disease class we have
+        # when true: You train projection → classifier with BCEWithLogitsLoss on the disease labels.
+        # result: the projection learns to produce embeddings that already carry pathology signal before you unfreeze the CNN.
+        self.use_warmup_classifier = use_warmup_classifier  
+
+        self.pretrained_weights = ResNet50_Weights.IMAGENET1K_V2    # the weights of the backbone-cnn
+        self.backbone = None   # is the pre-tranied-model's feature extractor with the final classification layer removed
+        self.proj = None       # is the projection head tha maps the backbone-model's feature vector to the desired embedding size d_img
+        self.classifier = None
+        self.is_backbone_frozen = False
+        self.load_pretrained_backbone()
+    
+    def load_pretrained_backbone(self):
+        if self.backbone_name.lower() == "resnet50":
+            m = tv.resnet50(weights=self.pretrained_weights)            # create torch-res-net-model
+            feat_dim = m.fc.in_features         # m.fc is the final fully-connected layer of res-net, .in_features tells you how many input features that layer expects. That number = size of pooled embedding coming out of the cnn its 2028 for resnet 50/101/152
+            # list stuff retruns a list of the top-level modules inside the resnet-m, for res-net-50 the last element is m.fc
+            # the sequential() wraps the remaining modules into a new sequential-layer
+            # list(m.children()) = [conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool, fc], we removed the final classification layer
+            self.backbone = nn.Sequential(*list(m.children())[:-1]) 
+        else:
+            raise ValueError(f"Unsupported backbone model: {self.backbone}")
+        
+        # project head: feat_dim -> d_img
+        # create a fully connected linear layer that maps the resnet feature vector size to our desired embedding size 
+        self.proj = nn.Linear(feat_dim, self.d_img)
+
+        # Warm up classifier head for BCE loss
+        if self.use_warmup_classifier == True:
+            # create linear classifier head that sits on top of the image embedding, it maps embedding (B x d_img) to (B x n_disease_Classes)
+            self.classifier = nn.Linear(self.d_img,self. n_disease_classes) 
+
+
+        # track wheather backbone is frozen
+        self.is_backbone_frozen = False
+
+
+
+
 
 
 # ===========================================================
@@ -148,15 +201,20 @@ def training_tests():
     img_s3_key_inputs, disease_classification_vectors_labels = construct_input_label_pairs_for_image_encoder_dataset(features_labels_df)    # pass in df we loaded from feature-store
     assert(len(img_s3_key_inputs) == len(disease_classification_vectors_labels))
     dataset = CXR_ImageDataset(img_s3_keys_input=img_s3_key_inputs, bucket=os.getenv("AWS_S3_BUCKET_NAME"), labels=disease_classification_vectors_labels, image_transform=image_transfom_into_tensor)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)   # create dataloader object
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True )   # create dataloader object
     print(f"dataset length: {len(dataset)}")
-    
+
     for batch_imgs, batch_labels in dataloader:     # iterate for all batches in dataloader, it calls __getitem__ & __len__ in the abckground while doing this to fetch examples by index
         print(f"batch img input shape: {batch_imgs.shape}")  # [32, 3, 224, 224], 32=batch-sizes, [B, 3, H, W]
         print(f"batch disease-vec label shape: {batch_labels.shape}")  # [32, 14], [batch, disease-classification]
         print(f"img one example shape: {batch_imgs[0].shape}")          # [3, 244, 244]
         print(f"disease-vec one example value: {batch_labels[0]}")
         break
+
+    print("---------IMAGE ENCODER: CREATE IMAGE-ENCODER-CLASS----------")
+    device = torch.device("cpu")
+    model = ImageEncoderCNN(backbone_name="resnet50", d_img=1024, n_disease_classes=13).to(device)
+    criterion = BCEWithLogitsLoss() 
 
 
 
