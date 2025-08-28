@@ -250,7 +250,20 @@ class ImageEncoderCNN(nn.Module):
         feats = self.backbone(x)    # feeds batch of input-images into backbone-model, [B, feat_dim, 1, 1]
         return feats.flatten(1)     # [B, feat_dim], same as above not disabling autograd
     
-    
+    # returns image embeddings only (no classifer) the output of our image-encoder-cnn
+    # images: is input torch-tensor of shape [B, 3, H, W]
+    def encode(self, images):
+        # if backbone is frozen then do no-grad forward-pass for backbone-model passing images-input
+        if self.is_backbone_frozen == True:
+            feats = self._backbone_forward_nograd(images)
+        # if backbone is not frozen then do grad forward-pass for backbone-model passing images-input
+        else:
+            feats = self._backbone_forward_grad(images) # in both cases feats
+
+        # passes backbone features (which are its output) into the projection-head which above is meant to convert it to the d_img embedding size we want. 
+        # [B, d_img], this is the final embedding shape of all images batched up, for each image outputs a tensor that represents it that its it embedding image
+        z = self.proj(feats)
+        return z
 
 
 
