@@ -233,7 +233,17 @@ class ImageEncoderCNN(nn.Module):
             return optimizer_cls(params, weight_decay=weight_decay)
 
 
+    # ---------- Forward passes ----------
 
+    # used in phase 1 to save memory/compute while frozen: decorator dsiables autograd for everything inside the function, autograd=differentiation engine, in phase 1 the backbone is frozen we don't want to build a computation graph for it so it speeds up forward
+    @torch.no_grad()    
+    def _backbone_forward_nograd(self, x):  # takes in torch-tensor input
+        # runs the pretrained-cnn (resnet without final) on input images x.
+         # for resset the last layer is a global average pool so shape is [B, feat-dim, 1, 1] = [B, 2048, 1, 1]
+        feats = self.backbone(x)       
+        # collapses dimensions form index 1 onward turning [B, feat_dim, 1, 1] into flat feature vector [B, feat-dim]
+        # this is what project head explains
+        return feats.flatten(1)     
 
 
 
