@@ -261,9 +261,18 @@ class ImageEncoderCNN(nn.Module):
             feats = self._backbone_forward_grad(images) # in both cases feats
 
         # passes backbone features (which are its output) into the projection-head which above is meant to convert it to the d_img embedding size we want. 
-        # [B, d_img], this is the final embedding shape of all images batched up, for each image outputs a tensor that represents it that its it embedding image
+        # [B, d_img], d-img=1024, this is the final embedding shape of all images batched up, for each image outputs a tensor that represents it that its it embedding image
         z = self.proj(feats)
         return z
+    
+    # standard forward for warm-up training.
+    # returns dict with embeddings and if enabled logits for disease labels
+    def forward(self, images):
+        z = self.encode(images)         # call encode func which returns mebeddings for every image [B, d_img]
+        out = {"embeddings": z}         # dict with ebeding key and z value
+        if self.classifier is not None:
+            out["logits"] = self.classifier(z)   # [B, n_disease]
+        return out
 
 
 
@@ -320,12 +329,40 @@ def training_tests():
 
     # Phase 1: freeze backbone, train heads
     print("=====Phase #1=====")
-    optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
     model.freeze_backbone()
+    optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
+    # iterate every batch of images/labels in dataloader
+    # where imgs: [B, 3, 224, 224], [32, 3, 224, 224], each element in batch is tensor representing image
+    # where y: [B, 13], [32, 13]
+    for imgs, y in dataloader:
+        imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
+        optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
+        out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
+        logits = out["logits"]  # pulls classification logits [B, 13]
+        loss = criterion(logits, y) # computes loss given logits & labels
+        loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
+        optim.step()                # updates params using optimizer with current gradients
+
+        print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img]
+        print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
+        break
 
     # Phase 2: unfreeze + discriminative lrs
     print("=====Phase #2=====")
     model.unfreeze_backbone()
+    optim = model.build_optimizer(phase=2, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2)
+    for imgs, y in dataloader:
+        imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
+        optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
+        out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
+        logits = out["logits"]  # pulls classification logits [B, 13]
+        loss = criterion(logits, y) # computes loss given logits & labels
+        loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
+        optim.step()                # updates params using optimizer with current gradientss
+
+        print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img], each element in out["eembeddings"] is a embedding-vector representing that im
+        print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
+        break
 
 
 
