@@ -15,6 +15,7 @@ import torchvision.transforms as T
 from torch.utils.data import Dataset, DataLoader    # this is how we do stack the batched tensors in training-inference pipe
 from torchvision.models import ResNet50_Weights     # backbone weights
 from torch.nn import BCEWithLogitsLoss
+from transformers import AutoTokenizer      # for text-encoder: pip install transformers torch
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -27,6 +28,7 @@ VERSION = 1
 INPUT_COLS = []
 OUTPUT_COLS = []
 IMG_SIZE = 224
+TEXT_ENCODER_MODEl_NAME = "bert-base-uncased"
 s3 = boto3.client("s3")
 
 
@@ -281,6 +283,22 @@ class ImageEncoderCNN(nn.Module):
 # Text Encoder
 # ===========================================================
 
+# tokenize input means to convert raw text into sequence on number so transformer can understand. 
+# create tokenizer-class from transformers-torch library based on the model-name provided.
+# from-pretrained loads the tokenizer files from HF hub for bert so the text is split into same token-ids that the model expects
+tokenizer = AutoTokenizer.from_pretrained(TEXT_ENCODER_MODEl_NAME)
+
+# takes in list of strings, where each string is a patient-detail, of length B the batch-size, pad every sequence
+# returns dict of tensors suitable for model
+def tokenize_patient_details(text_list, max_len=96):
+
+    # call the tokenizer we created, passing the list of texts, if a string would exceed max-len then cut it off so shapes of each string are [B, seq-len], each token is a sub-word so 96 tokens is approzimately 65 worxs
+    tok = tokenizer(text_list, padding="max_length", truncation=True, return_tensors="pt", max_length=max_len)
+
+    # dictionary of tensors, key "input-ids" is equal to tensor of shape [B, L] each tensor in batch is represents a patient-detial-example-text of length L in text-list
+    # key "attention_mask" is eqault ot torch tensor of shape [B, L]
+    return tok
+
 # ===========================================================
 # Fusion Model
 # ===========================================================
@@ -303,67 +321,75 @@ def training_tests():
     print(f"image bytes object: {image_bytes_obj[0:5]}")
 
     print("----------IMAGE ENCODER: IMAGE TRANSFORM TEST SINGLE IMAGE----------")
-    pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert image-bytes into pil-img-obj
-    tensor_img = image_transfom_into_tensor(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
-    print(tensor_img.shape)  # should be [3, 224, 224], [3, img_sze, img_sze], check image-size constant
-    print(tensor_img.dtype) 
+    # pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert image-bytes into pil-img-obj
+    # tensor_img = image_transfom_into_tensor(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
+    # print(tensor_img.shape)  # should be [3, 224, 224], [3, img_sze, img_sze], check image-size constant
+    # print(tensor_img.dtype) 
 
     print("----------IMAGE ENCODER: CONSTRUCT IMAGE-CXR-TORCH-DATASET----------")
-    img_s3_key_inputs, disease_classification_vectors_labels = construct_input_label_pairs_for_image_encoder_dataset(features_labels_df)    # pass in df we loaded from feature-store
-    assert(len(img_s3_key_inputs) == len(disease_classification_vectors_labels))
-    dataset = CXR_ImageDataset(img_s3_keys_input=img_s3_key_inputs, bucket=os.getenv("AWS_S3_BUCKET_NAME"), labels=disease_classification_vectors_labels, image_transform=image_transfom_into_tensor)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True )   # create dataloader object
-    print(f"dataset length: {len(dataset)}")
+    # img_s3_key_inputs, disease_classification_vectors_labels = construct_input_label_pairs_for_image_encoder_dataset(features_labels_df)    # pass in df we loaded from feature-store
+    # assert(len(img_s3_key_inputs) == len(disease_classification_vectors_labels))
+    # dataset = CXR_ImageDataset(img_s3_keys_input=img_s3_key_inputs, bucket=os.getenv("AWS_S3_BUCKET_NAME"), labels=disease_classification_vectors_labels, image_transform=image_transfom_into_tensor)
+    # dataloader = DataLoader(dataset, batch_size=32, shuffle=True )   # create dataloader object
+    # print(f"dataset length: {len(dataset)}")
 
-    for batch_imgs, batch_labels in dataloader:     # iterate for all batches in dataloader, it calls __getitem__ & __len__ in the abckground while doing this to fetch examples by index
-        print(f"batch img input shape: {batch_imgs.shape}")  # [32, 3, 224, 224], 32=batch-sizes, [B, 3, H, W]
-        print(f"batch disease-vec label shape: {batch_labels.shape}")  # [32, 14], [batch, disease-classification]
-        print(f"img one example shape: {batch_imgs[0].shape}")          # [3, 244, 244]
-        print(f"disease-vec one example value: {batch_labels[0]}")
-        break
+    # for batch_imgs, batch_labels in dataloader:     # iterate for all batches in dataloader, it calls __getitem__ & __len__ in the abckground while doing this to fetch examples by index
+    #     print(f"batch img input shape: {batch_imgs.shape}")  # [32, 3, 224, 224], 32=batch-sizes, [B, 3, H, W]
+    #     print(f"batch disease-vec label shape: {batch_labels.shape}")  # [32, 14], [batch, disease-classification]
+    #     print(f"img one example shape: {batch_imgs[0].shape}")          # [3, 244, 244]
+    #     print(f"disease-vec one example value: {batch_labels[0]}")
+    #     break
 
     print("---------IMAGE ENCODER: CREATE IMAGE-ENCODER-CLASS----------")
-    device = torch.device("cpu")
-    model = ImageEncoderCNN(backbone_name="resnet50", d_img=1024, n_disease_classes=13).to(device)
-    criterion = BCEWithLogitsLoss() 
+    # device = torch.device("cpu")
+    # model = ImageEncoderCNN(backbone_name="resnet50", d_img=1024, n_disease_classes=13).to(device)
+    # criterion = BCEWithLogitsLoss() 
 
     # Phase 1: freeze backbone, train heads
     print("=====Phase #1=====")
-    model.freeze_backbone()
-    optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
-    # iterate every batch of images/labels in dataloader
-    # where imgs: [B, 3, 224, 224], [32, 3, 224, 224], each element in batch is tensor representing image
-    # where y: [B, 13], [32, 13]
-    for imgs, y in dataloader:
-        imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
-        optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
-        out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
-        logits = out["logits"]  # pulls classification logits [B, 13]
-        loss = criterion(logits, y) # computes loss given logits & labels
-        loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
-        optim.step()                # updates params using optimizer with current gradients
+    # model.freeze_backbone()
+    # optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
+    # # iterate every batch of images/labels in dataloader
+    # # where imgs: [B, 3, 224, 224], [32, 3, 224, 224], each element in batch is tensor representing image
+    # # where y: [B, 13], [32, 13]
+    # for imgs, y in dataloader:
+    #     imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
+    #     optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
+    #     out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
+    #     logits = out["logits"]  # pulls classification logits [B, 13]
+    #     loss = criterion(logits, y) # computes loss given logits & labels
+    #     loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
+    #     optim.step()                # updates params using optimizer with current gradients
 
-        print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img]
-        print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
-        break
+    #     print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img]
+    #     print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
+    #     break
 
     # Phase 2: unfreeze + discriminative lrs
     print("=====Phase #2=====")
-    model.unfreeze_backbone()
-    optim = model.build_optimizer(phase=2, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2)
-    for imgs, y in dataloader:
-        imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
-        optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
-        out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
-        logits = out["logits"]  # pulls classification logits [B, 13]
-        loss = criterion(logits, y) # computes loss given logits & labels
-        loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
-        optim.step()                # updates params using optimizer with current gradientss
+    # model.unfreeze_backbone()
+    # optim = model.build_optimizer(phase=2, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2)
+    # for imgs, y in dataloader:
+    #     imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
+    #     optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
+    #     out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
+    #     logits = out["logits"]  # pulls classification logits [B, 13]
+    #     loss = criterion(logits, y) # computes loss given logits & labels
+    #     loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
+    #     optim.step()                # updates params using optimizer with current gradientss
 
-        print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img], each element in out["eembeddings"] is a embedding-vector representing that im
-        print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
-        break
+    #     print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img], each element in out["eembeddings"] is a embedding-vector representing that im
+    #     print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
+    #     break
+    
 
+
+
+    print("----------TEXT ENCODER: TOKENIZE PATIETN DETAILS TEXT----------")
+    texts = ["67M, smoker; dyspnea; CHF history.", "54F, no smoking; cough; asthma."]
+    tok = tokenize_patient_details(texts, max_len=96)
+    print(f"Batch tensors of patient details: {tok['input_ids'].shape} ")   # expected [B, seq-len] = [2, 96], we get text length above
+    print(f"Single patient detail text tensor tokenized shape: {tok['input_ids'][0].shape}")  # expect shape [seq-len] = [96]
 
 
 training_tests()
