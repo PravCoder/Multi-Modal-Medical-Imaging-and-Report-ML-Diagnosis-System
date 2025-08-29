@@ -346,6 +346,25 @@ class TextEncoderTransformer(nn.Module):
         # keep classifier-head in training-mode, multi-label disease logits
         if self.classifier is not None:
             self.classifier.train()
+    # PHASE 2: allows the pretrained backbone transformer to learn again, unfreeze backbone keep training heads
+    def unfreeze_encoder(self):
+        # iterate all parameter-tensors in backbone-encoder-model, turn on gradients so backprop can update them during fine-tuing
+        for p in self.encoder.parameters():
+            p.requires_grad = True
+        # update flag
+        self.is_frozen = False
+
+        # puts the encoder-backboe is training mode, enables dropout.
+        self.encoder.train()
+
+        # puts projection-head in training mode, it continues to learn algonside the encoder
+        self.proj.train()
+
+        # puts classifier-head in training mode
+        if self.classifier is not None:
+            self.classifier.train()
+
+
 
 # ===========================================================
 # Fusion Model
@@ -446,6 +465,9 @@ def training_tests():
     print("=====Phase #1======")
     text_encoder_model.freeze_encoder()
     # optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)
+
+    print("=====Phase #2=====")
+    text_encoder_model.unfreeze_encoder()
 
 training_tests()
 
