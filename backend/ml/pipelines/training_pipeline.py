@@ -4,10 +4,14 @@ import pandas as pd
 import numpy as np
 import json, os
 from helper import print_clean_df
-import warnings
+import warnings      
 import io
 from PIL import Image
 import boto3
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # hf tokenizers can deadlock with forked workers on macOS
+from transformers.utils import logging as hf_logging    # quit the HF logs because they are spammy
+hf_logging.set_verbosity_error()  
 import torch
 import torch.nn as nn            # neural network layers modules
 import torchvision.models as tv  # ready-made CNN backbones (ResNet, etc
@@ -305,11 +309,11 @@ def tokenize_patient_details(text_list, max_len=96):
 class TextEncoderTransformer(nn.Module):
 
     def __init__(self, model_name="bert-base-uncased", d_txt=512, n_disease=13, use_warmup_classifier=True):
-        super().__init()
+        super().__init__()
         self.model_name = model_name
         self.d_txt = d_txt              # embedding size of a patient-detail string
         self.n_disease = n_disease      # number of disease classes
-        self.use_warmup_classifier      # if you want a classifer-head
+        self.use_warmup_classifier=use_warmup_classifier      # if you want a classifer-head
 
         # loads the given models hyperparameters from torch
         self.hyperparameters = AutoConfig.from_pretrained(model_name)
@@ -321,9 +325,27 @@ class TextEncoderTransformer(nn.Module):
         # create the projection-head maps the encoders pooled vector from hidden-size to our desired embedding size d-txt
         self.proj = nn.Linear(self.hidden_size, self.d_txt)
         # optional classifier-head linear-transformation layer, for disease supervision during phase-1, takes the 
-        self.classifer = nn.Linear(d_txt, n_disease) if self.use_warmup_classifier else None    # takes projected embedding d-txt -> logits [n-disease]
+        self.classifier = nn.Linear(d_txt, n_disease) if self.use_warmup_classifier else None    # takes projected embedding d-txt -> logits [n-disease]
 
         self.is_frozen = False  # internal flag if backbone-pretrained-model is frozen or not
+
+    # PHASE 1: freeze the bacbone-encoder, only train heads
+    def freeze_encoder(self):
+        # iterate all parameter-tensors of backbone-encoder-model & turn off its gradient updates so optimizer wont change these weights, torch wont allocate grad buffers for them
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+        # update flag
+        self.is_frozen = True  
+
+        # puts the encoder in evaluation-mode, for bert-family models this disables dropout giving stable outputs when frozen
+        self.encoder.eval()
+
+        # keep the projection-head in training-mode, this head maps hidden_size → d_tx, this doesnt itself train
+        self.proj.train()
+
+        # keep classifier-head in training-mode, multi-label disease logits
+        if self.classifier is not None:
+            self.classifier.train()
 
 # ===========================================================
 # Fusion Model
@@ -411,11 +433,22 @@ def training_tests():
 
 
 
-    print("----------TEXT ENCODER: TOKENIZE PATIETN DETAILS TEXT----------")
+    print("----------TEXT ENCODER: TOKENIZE PATIENT DETAILS TEXT----------")
     texts = ["67M, smoker; dyspnea; CHF history.", "54F, no smoking; cough; asthma."]
     tok = tokenize_patient_details(texts, max_len=96)   # length of each sequence is set to 96
+
+    device = torch.device("cpu")
+    text_encoder_model = TextEncoderTransformer(model_name="bert-base-uncased", d_txt=512, n_disease=13).to(device)
+
     print(f"Batch tensors of patient details: {tok['input_ids'].shape} ")   # expected [B, seq-len] = [2, 96], we get text length above
     print(f"Single patient detail text tensor tokenized shape: {tok['input_ids'][0].shape}")  # expect shape [seq-len] = [96]
 
+    print("=====Phase #1======")
+    text_encoder_model.freeze_encoder()
+    # optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)
 
 training_tests()
+
+
+
+
