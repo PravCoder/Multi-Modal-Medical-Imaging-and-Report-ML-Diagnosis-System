@@ -222,7 +222,7 @@ class ImageEncoderCNN(nn.Module):
         elif phase == 2:
             params = []     # start with empty list of parameter groups
 
-            # for every parmeter in backbone-model if it requires-gra=true then only add it to bb-params (supports partial unfreeze)
+            # for every parmeter in backbone-model if it requires-grad=true then only add it to bb-params (supports partial unfreeze)
             bb_params = [p for p in self.backbone.parameters() if p.requires_grad]
             # if backbone-params has anything in it then add it as a parameter group to params-list
             if bb_params:
@@ -346,6 +346,7 @@ class TextEncoderTransformer(nn.Module):
         # keep classifier-head in training-mode, multi-label disease logits
         if self.classifier is not None:
             self.classifier.train()
+    
     # PHASE 2: allows the pretrained backbone transformer to learn again, unfreeze backbone keep training heads
     def unfreeze_encoder(self):
         # iterate all parameter-tensors in backbone-encoder-model, turn on gradients so backprop can update them during fine-tuing
@@ -364,6 +365,32 @@ class TextEncoderTransformer(nn.Module):
         if self.classifier is not None:
             self.classifier.train()
 
+    # builds an optimizer, specifying learning-rates for encoder & heads, optimizer_cls: is torch object, specifies which optimizer algo to build, phase=1/2
+    def build_optimizer(self, phase, lr_enc=1e-4, lr_head=54-4, weight_decay=1e-2, optimizer_cls=torch.optim.AdamW):
+        # if its phase 1 only train heads so pass the parameters groups for heads only
+        if phase == 1:
+            # params is a list of parameter groups, the first group is the project-head parameters add its group in params-list, passing in the learning-rate for the head in this param group
+            params = [{"params":self.proj.parameters(), "lr": lr_head}]
+            # add classifer param group {} to params, passing in the classifier-parameters
+            if self.classifier is not None:
+                params.append({"params": self.classifier.parameters(), "lr": lr_head})
+            return optimizer_cls(params, weight_decay=weight_decay)
+        
+        # if its phase 2 add parameter groups for backbone & head
+        if phase == 2:  
+            # gather only the encoder-backbone parameters that are currently trainable
+            enc_params = [p for p in self.encoder.parameters() if p.requires_grad]
+            params = []
+
+            # if any exist add a parameter group for the encoder's-params
+            if enc_params:
+                params.append({"params":enc_params, "lr":lr_enc})
+
+            # create parameter-groups for projection-head and classifier-head
+            params.append({"params": self.proj.parameters(), "lr": lr_head})
+            if self.classifier is not None:
+                params.append({"params": self.classifier.parameters(), "lr": lr_head})
+            return optimizer_cls(params, weight_decay=weight_decay)
 
 
 # ===========================================================
@@ -464,7 +491,7 @@ def training_tests():
 
     print("=====Phase #1======")
     text_encoder_model.freeze_encoder()
-    # optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)
+    optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)
 
     print("=====Phase #2=====")
     text_encoder_model.unfreeze_encoder()
