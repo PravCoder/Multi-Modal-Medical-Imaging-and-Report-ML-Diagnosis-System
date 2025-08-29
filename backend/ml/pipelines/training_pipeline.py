@@ -15,7 +15,7 @@ import torchvision.transforms as T
 from torch.utils.data import Dataset, DataLoader    # this is how we do stack the batched tensors in training-inference pipe
 from torchvision.models import ResNet50_Weights     # backbone weights
 from torch.nn import BCEWithLogitsLoss
-from transformers import AutoTokenizer      # for text-encoder: pip install transformers torch
+from transformers import AutoTokenizer, AutoModel, AutoConfig      # for text-encoder: pip install transformers torch
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -119,7 +119,6 @@ class CXR_ImageDataset(Dataset):
 
 # torch module that represents a CNN-image-encoder that takes in a image & outputs a embedding that represents that image
 # backbone of cnn: is itself a deep-cnn typically pre-trained on massive datasets, it process input data like images through multiple convolutional and pooling layers to generate rich, hierarchical feature maps.
-
 class ImageEncoderCNN(nn.Module):
     
     def __init__(self, backbone_name="resnet50", d_img=1024, n_disease_classes=13, use_warmup_classifier=True, pretrained_weights=ResNet50_Weights.IMAGENET1K_V2):
@@ -299,6 +298,33 @@ def tokenize_patient_details(text_list, max_len=96):
     # key "attention_mask" is eqault ot torch tensor of shape [B, L]
     return tok
 
+# torch-model that represents an text-encoder-transformer, takes in as input the batch of patient-detail texts
+# backbone: is self.encoder, its a bert-model backbone is suaully called the encoder.
+# the idea is as same as the cnn, where we have a backbone pre-trained-transformer and we add head(s) on stop of it. 
+# heads: pooling-head, projection-head (just converts it into the dimentionality we want), classifier-head
+class TextEncoderTransformer(nn.Module):
+
+    def __init__(self, model_name="bert-base-uncased", d_txt=512, n_disease=13, use_warmup_classifier=True):
+        super().__init()
+        self.model_name = model_name
+        self.d_txt = d_txt              # embedding size of a patient-detail string
+        self.n_disease = n_disease      # number of disease classes
+        self.use_warmup_classifier      # if you want a classifer-head
+
+        # loads the given models hyperparameters from torch
+        self.hyperparameters = AutoConfig.from_pretrained(model_name)
+        # loads the pretrained-transfoer-encoder-backbone-model from torch given its name
+        self.encoder = AutoModel.from_pretrained(model_name)
+
+        # stores the encoders token-embedding dimensionality so we can wire the layers correctly even if you swap models
+        self.hidden_size = self.hyperparameters.hidden_size
+        # create the projection-head maps the encoders pooled vector from hidden-size to our desired embedding size d-txt
+        self.proj = nn.Linear(self.hidden_size, self.d_txt)
+        # optional classifier-head linear-transformation layer, for disease supervision during phase-1, takes the 
+        self.classifer = nn.Linear(d_txt, n_disease) if self.use_warmup_classifier else None    # takes projected embedding d-txt -> logits [n-disease]
+
+        self.is_frozen = False  # internal flag if backbone-pretrained-model is frozen or not
+
 # ===========================================================
 # Fusion Model
 # ===========================================================
@@ -352,7 +378,7 @@ def training_tests():
     # # iterate every batch of images/labels in dataloader
     # # where imgs: [B, 3, 224, 224], [32, 3, 224, 224], each element in batch is tensor representing image
     # # where y: [B, 13], [32, 13]
-    # for imgs, y in dataloader:
+    # for imgs, y in dataloader:                    # passing in our data which fine-tunes it
     #     imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
     #     optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
     #     out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
@@ -369,7 +395,7 @@ def training_tests():
     print("=====Phase #2=====")
     # model.unfreeze_backbone()
     # optim = model.build_optimizer(phase=2, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2)
-    # for imgs, y in dataloader:
+    # for imgs, y in dataloader:                    # passing in our data which fine-tunes it
     #     imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
     #     optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
     #     out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
@@ -387,7 +413,7 @@ def training_tests():
 
     print("----------TEXT ENCODER: TOKENIZE PATIETN DETAILS TEXT----------")
     texts = ["67M, smoker; dyspnea; CHF history.", "54F, no smoking; cough; asthma."]
-    tok = tokenize_patient_details(texts, max_len=96)
+    tok = tokenize_patient_details(texts, max_len=96)   # length of each sequence is set to 96
     print(f"Batch tensors of patient details: {tok['input_ids'].shape} ")   # expected [B, seq-len] = [2, 96], we get text length above
     print(f"Single patient detail text tensor tokenized shape: {tok['input_ids'][0].shape}")  # expect shape [seq-len] = [96]
 
