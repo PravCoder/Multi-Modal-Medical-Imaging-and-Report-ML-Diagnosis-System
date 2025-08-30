@@ -256,7 +256,7 @@ class ImageEncoderCNN(nn.Module):
         return feats.flatten(1)     # [B, feat_dim], same as above not disabling autograd
     
     # returns image embeddings only (no classifer) the output of our image-encoder-cnn
-    # images: is input torch-tensor of shape [B, 3, H, W]
+    # images: is input torch-tensor of shape [B, 3, H, W], H=height, W=weight of pixel
     def encode(self, images):
         # if backbone is frozen then do no-grad forward-pass for backbone-model passing images-input
         if self.is_backbone_frozen == True:
@@ -407,8 +407,8 @@ class TextEncoderTransformer(nn.Module):
     Masked mean pooling: average only the non-padding token vectors, result shape is [B, H], where one H-dim vector per example.
     Then we pass through projection head H->D_txt, z_txt shape [B, D_txt]
     """
-    # masked-mean-pooling over token embeddings, it turns a sequence of token vectors into an vector per example by averaging only the real tokens (not-padded)
-    # last-hidden-state: the transformers final-layer token mebeddings, shape [B, L, H] batch, seq-len, hidden-size. Its a torch tensor. Each row is a toekn vector
+    # masked-mean-pooling over token embeddings, it turns a sequence of token vectors into an vector per example by averaging only the real tokens (not-padded), a sequence/example has multiiple tokens so multiple token-vectors
+    # last-hidden-state: the transformers final-layer-output token embeddings, shape [B, L, H] batch, seq-len, hidden-size. Its a torch tensor. Each row is a toekn vector
     # attention-mask: tells which positions real tokens (1) and which are padding (0), shape [B, L]. Its a torch tensor. Comes from the tokenizer.
     def mean_pool(last_hidden_state, attention_mask):
         mask = attention_mask.unsqueeze(-1).type_as(last_hidden_state)  # [B,L,1]
@@ -419,6 +419,54 @@ class TextEncoderTransformer(nn.Module):
         # divides feature-wise totals by the number of valid tokens → the mean embedding per example. Shape [B, H]
         return summed / counts
 
+    # Forward functions below are encode(), forward()
+    # input-ids: [B, L], token ids is the input the text encoder needs, what you get from the tokenizer, where L=seq-len and each example in batch represents a patient-detail example
+    # attention-mask: [B, L] 1 for real tokens, 0 for padding so we can ignore pads
+    # token-type-ids: [B, L] segment ids
+    def encode(self, input_ids, attention_mask, token_type_ids):
+        # if backbone is frozen run teh forward of the transformer without gradient
+        if self.is_frozen == True:
+            with torch.no_grad():
+                # forward-pass of pretrained-backbone-transformer-bert it returns hidden states, output is an object with named attributes
+                out = self.encoder(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, return_dict=True)
+        else:  
+            # if the encoder-backbone is not frozen phase-2 fine-tuning, run the forward pass with gradients so backprop can update the encoder weights
+            out = self.encoder(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, return_dict=True)
+
+        # out.last_hidden_state is sequence of toekn vectors from the last transformer layer [B, L, H], each [L, H] row for an example is the contextual embedding for each token position, pooling sits on top of final-transformer-layer
+        # does masked pooling over the token dimension using attention-mask so pading doesnt affect the average
+        # result is one vector per example, shape [B, H]
+        pooled = self.mean_pool(out.last_hidden_state, attention_mask)
+
+        # project-head is linear layer that maps the pooled vector from H into our desired text-embedding size d-txt, ex 768->512
+        # output z is the final text embedding per example [B, d_txt]
+        z = self.proj(pooled)
+
+        """
+        In:
+        input_ids [B,L], attention_mask [B,L] (and maybe token_type_ids [B,L])
+
+        Encoder out:
+        last_hidden_state [B,L,H]
+
+        Pool:
+        pooled [B,H]
+
+        Project:
+        z [B,d_txt] ← this is what you concatenate with the image embedding later.
+        """
+
+        return z
+    
+
+    # expects keys inputs_ids [B, L], attention_mask [B,L], (optional) token_type_ids
+    # returns  {"embeddings": [B,d_txt], "logits": [B,n_disease]}
+    def forward(self, **batch):
+        z = self.encode(batch["input_ids"], batch["attention_mask"], batch.get("token_type_ids"))
+        out = {"embeddings": z}
+        if self.classifier is not None:
+            out["logits"] = self.classifier(z)
+        return out
 
 # ===========================================================
 # Fusion Model
