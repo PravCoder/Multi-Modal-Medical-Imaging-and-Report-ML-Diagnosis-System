@@ -410,7 +410,7 @@ class TextEncoderTransformer(nn.Module):
     # masked-mean-pooling over token embeddings, it turns a sequence of token vectors into an vector per example by averaging only the real tokens (not-padded), a sequence/example has multiiple tokens so multiple token-vectors
     # last-hidden-state: the transformers final-layer-output token embeddings, shape [B, L, H] batch, seq-len, hidden-size. Its a torch tensor. Each row is a toekn vector
     # attention-mask: tells which positions real tokens (1) and which are padding (0), shape [B, L]. Its a torch tensor. Comes from the tokenizer.
-    def mean_pool(last_hidden_state, attention_mask):
+    def mean_pool(self, last_hidden_state, attention_mask):
         mask = attention_mask.unsqueeze(-1).type_as(last_hidden_state)  # [B,L,1]
         # element-wise multiply zeros out padded token vectors (because pad mask positions are 0).
         summed = (last_hidden_state * mask).sum(dim=1)                   # [B,H]
@@ -555,22 +555,61 @@ def training_tests():
 
 
     print("----------TEXT ENCODER: TOKENIZE PATIENT DETAILS TEXT----------")
-    texts = ["67M, smoker; dyspnea; CHF history.", "54F, no smoking; cough; asthma."]
-    tok = tokenize_patient_details(texts, max_len=96)   # length of each sequence is set to 96
-
     device = torch.device("cpu")
+    # create synthetic batch
+    patient_details_texts = ["67M, smoker; dyspnea; CHF history.", "54F, no smoking; cough; asthma."]
+    n_classes = 13
+    # create torch-tensor of labels for each example of patient-details
+    y = torch.tensor([[0,1,0,1,0,0,0,0,1,0,1,0,0], [1,0,0,0,0,1,0,0,0,0,0,0,1]], dtype=torch.float32, device=device) 
+    
+    # tokenize the texts into tensors & build model
+    tok = tokenize_patient_details(patient_details_texts, max_len=96)   # length of each sequence is set to 96
     text_encoder_model = TextEncoderTransformer(model_name="bert-base-uncased", d_txt=512, n_disease=13).to(device)
 
+    # stuff returned from tokenizer
     print(f"Batch tensors of patient details: {tok['input_ids'].shape} ")   # expected [B, seq-len] = [2, 96], we get text length above
     print(f"Single patient detail text tensor tokenized shape: {tok['input_ids'][0].shape}")  # expect shape [seq-len] = [96]
-
-    print("=====Phase #1======")
-    text_encoder_model.freeze_encoder()
-    optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)
     
+    # loss for warm-up classifier
+    criterion = nn.BCEWithLogitsLoss()
+   
+
+    print("=====Phase #1, freeze encoder, train heads======")
+    text_encoder_model.freeze_encoder()         # freeze-backbone-model
+    optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)   # create
+
+    text_encoder_model.train()  # method inheritied from torch
+
+    # run 3 update-steps for testing
+    print("Training...")
+    for step in range(3):
+        optim.zero_grad()                   # clears old gradients
+        out = text_encoder_model(**tok)     # forward-pass through TextEncoderTransformer obj, tok has the inputs look above
+        z = out["embeddings"]               # pooled+projected-text-vectors [B, d_txt], for each example there is a vector embedding output from transformer of size d-txt
+        logits = out["logits"]              # logits for diseases
+        loss = criterion(logits, y)         # compute the loss pass ing multi-label targets y, which is disease-classification-vector for each patient-detail example in B
+        loss.backward()                     # backprop autograd computes gradients for all parameters were used to produce logits and requires-grad=True
+        optim.step()                        # update stpe uses accumlated gradietns to adjust parameters   
+        # expected: z.shape = [B, d_txt] = [2, 512], loss going down                 
+        print(f"Step {step}: z.shape={z.shape}, logits.shape={logits.shape}, loss={loss.item():.4f}")
+
 
     print("=====Phase #2=====")
-    text_encoder_model.unfreeze_encoder()
+    text_encoder_model.unfreeze_encoder()   # unfreeze the backbone make its params trainable
+    optim = text_encoder_model.build_optimizer(phase=2, lr_enc=2e-5, lr_head=5e-4, weight_decay=1e-2)
+    
+    print("Training...")
+    for step in range(3):
+        optim.zero_grad()                   # clears old gradients
+        out = text_encoder_model(**tok)     # forward-pass through TextEncoderTransformer obj, tok has the inputs look above
+        z = out["embeddings"]               # pooled+projected-text-vectors [B, d_txt], for each example there is a vector embedding output from transformer of size d-txt
+        logits = out["logits"]              # logits for diseases
+        loss = criterion(logits, y)         # compute the loss pass ing multi-label targets y, which is disease-classification-vector for each patient-detail example in B
+        loss.backward()                     # backprop autograd computes gradients for all parameters were used to produce logits and requires-grad=True
+        optim.step()                        # update stpe uses accumlated gradietns to adjust parameters   
+        # expected: z.shape = [B, d_txt] = [2, 512], loss going down                 
+        print(f"Step {step}: z.shape={z.shape}, logits.shape={logits.shape}, loss={loss.item():.4f}")
+
 
 training_tests()
 
