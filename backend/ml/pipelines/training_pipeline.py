@@ -367,7 +367,7 @@ class TextEncoderTransformer(nn.Module):
 
     # builds an optimizer, specifying learning-rates for encoder & heads, optimizer_cls: is torch object, specifies which optimizer algo to build, phase=1/2
     def build_optimizer(self, phase, lr_enc=1e-4, lr_head=54-4, weight_decay=1e-2, optimizer_cls=torch.optim.AdamW):
-        # if its phase 1 only train heads so pass the parameters groups for heads only
+        # if its phase 1 only train heads so pass the parameters groups for heads only not backbone
         if phase == 1:
             # params is a list of parameter groups, the first group is the project-head parameters add its group in params-list, passing in the learning-rate for the head in this param group
             params = [{"params":self.proj.parameters(), "lr": lr_head}]
@@ -378,7 +378,7 @@ class TextEncoderTransformer(nn.Module):
         
         # if its phase 2 add parameter groups for backbone & head
         if phase == 2:  
-            # gather only the encoder-backbone parameters that are currently trainable
+            # gather only the encoder-backbone parameters that are currently trainable ie param.requires-grad=true
             enc_params = [p for p in self.encoder.parameters() if p.requires_grad]
             params = []
 
@@ -391,6 +391,33 @@ class TextEncoderTransformer(nn.Module):
             if self.classifier is not None:
                 params.append({"params": self.classifier.parameters(), "lr": lr_head})
             return optimizer_cls(params, weight_decay=weight_decay)
+
+    """
+    Given a patient detials: "67M smoker"
+    Tokenize -> split into tokens -> token1=67, token2=M, ....etc.
+    Each tokens becomes an integer shape [L], where L is seq-length
+
+    Transformer forward -> for eaech token the model produces a vector of size H (hidden size 768), stack those per token last-hidden-state shape [L,H]
+    [token-0-vector, token-1-vector, ... , token-L-1-vector]
+    Token vector = is vector representing that token, the contextual embedding for a specific token position output by the model
+
+    If you have a batch of B examples you get: last-hidden-state shape [B, L, H], so each example has its own [L, H] matrix.
+
+    Each example (to feed the fusion) we want a single fixed-size embedding. 
+    Masked mean pooling: average only the non-padding token vectors, result shape is [B, H], where one H-dim vector per example.
+    Then we pass through projection head H->D_txt, z_txt shape [B, D_txt]
+    """
+    # masked-mean-pooling over token embeddings, it turns a sequence of token vectors into an vector per example by averaging only the real tokens (not-padded)
+    # last-hidden-state: the transformers final-layer token mebeddings, shape [B, L, H] batch, seq-len, hidden-size. Its a torch tensor. Each row is a toekn vector
+    # attention-mask: tells which positions real tokens (1) and which are padding (0), shape [B, L]. Its a torch tensor. Comes from the tokenizer.
+    def mean_pool(last_hidden_state, attention_mask):
+        mask = attention_mask.unsqueeze(-1).type_as(last_hidden_state)  # [B,L,1]
+        # element-wise multiply zeros out padded token vectors (because pad mask positions are 0).
+        summed = (last_hidden_state * mask).sum(dim=1)                   # [B,H]
+        # counts how many tokens were valid per example (since mask has 1s for valid tokens). Shape [B, 1]
+        counts = mask.sum(dim=1).clamp(min=1e-6)                         # [B,1]
+        # divides feature-wise totals by the number of valid tokens → the mean embedding per example. Shape [B, H]
+        return summed / counts
 
 
 # ===========================================================
@@ -492,6 +519,7 @@ def training_tests():
     print("=====Phase #1======")
     text_encoder_model.freeze_encoder()
     optim = text_encoder_model.build_optimizer(phase=1, lr_head=5e-4)
+    
 
     print("=====Phase #2=====")
     text_encoder_model.unfreeze_encoder()
