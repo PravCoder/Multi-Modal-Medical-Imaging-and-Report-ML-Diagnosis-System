@@ -20,6 +20,8 @@ from torch.utils.data import Dataset, DataLoader    # this is how we do stack th
 from torchvision.models import ResNet50_Weights     # backbone weights
 from torch.nn import BCEWithLogitsLoss
 from transformers import AutoTokenizer, AutoModel, AutoConfig      # for text-encoder: pip install transformers torch
+from transformers import T5ForConditionalGeneration                 # for fusion model
+from transformers.modeling_outputs import BaseModelOutput           # for fusion model
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -472,9 +474,54 @@ class TextEncoderTransformer(nn.Module):
 # Fusion Model
 # ===========================================================
 
-# Train
+# torch-model that represents a transformer, using model T5 encoder-decoder transformer HF
+# for each example takes in image/text embeddings -> MLP -> heads (disease-classification-head, report-generation-head)
+class FusionTransformerModel(nn.Module):
 
-# Save models to model registry
+    def __init__(self, d_img, d_txt, d_fuse_hidden, n_disease=13, model_name="t5-small", n_cond_tokens=4, dropout=0.1):
+        super().__init()
+        self.d_img = d_img  # embedding size of image-vector output of image-encoder
+        self.d_txt = d_txt  # embedding size of text-vector output of text-encoder
+        self.d_fuse_hidden = d_fuse_hidden      # hidden width inside fusion mlp
+        self.n_disease = n_disease
+        self.model_name = model_name
+        self.n_cond_tokens = n_cond_tokens  # how many conditioning tokens for T5 encoder
+        self.dropout = dropout
+
+        # the dimension of the input into this model is the sum of the dimension of the image-embedding + text-embedding
+        self.d_fuse = self.d_img + self.d_txt
+
+        # create fusion-mlp-model
+        # takes in input: tesnor of shape [B, d_fuse] = [B, d_img+d_txt]
+        # outputs: tensor of shape [B, d_fuse_hidden] which is (same batch size, new feature width), is this is used vector you feed into the disease-head & report-head
+        self.fusion_mlp = nn.Sequential(
+            nn.Linear(self.d_fuse, self.d_fuse_hidden),     # projects the features from size [D, d_fuse] -> [B, d_fuse_hidden], the 2 inputs mea (size of each input smaple, size of each output sample)
+            nn.GELU(),                                      # nonlineraity
+            nn.Dropout(dropout),                            # regularization
+            nn.Layernorm(self.d_fuse_hidden),               # per-example feature normalization
+        )
+
+        # creates disease-head as a linear-learnable-layer that maps the fused-vector to per-disease-scores logits, (input-size, output-size)
+        self.disease_head = nn.Linear(self.d_fuse_hidden, n_disease)
+
+        # loads pretrained-encdoer-decoder-transformer, this model will generate a radiology report
+        self.report_model = T5ForConditionalGeneration.from_pretrained(self.model_name)
+        # pulls the models hidden-size from its config, t5-small=512, t5-base=768, t5-large=1024
+        self.h_dec = self.report_model.config.d_model
+        # stores the conditioning tokens you want to synthesize from teh fused vector
+        self.n_cond = self.n_cond_tokens
+
+        # create tiny mlp that turns the fused vector z-fuse into a pack K conditioning tokens that match the decoders hidden size. 
+        # Input: [B, d_fuse_hidden] → Output: [B, K*H_dec]
+        self.cond_proj = nn.Sequential(
+            # fully connected layer that maps each fused vector of length d-fuse-hidden to K * H_dec
+            # self.h_dec = the decoder models hidden size, self.n_cond = K, number of conditing tokens you want, like 4.
+            nn.Linear(self.d_fuse_hidden, self.h_dec * self.n_cond),    
+            nn.GELU(), 
+        )
+
+
+
 
 
 def training_tests():
@@ -609,6 +656,13 @@ def training_tests():
         optim.step()                        # update stpe uses accumlated gradietns to adjust parameters   
         # expected: z.shape = [B, d_txt] = [2, 512], loss going down                 
         print(f"Step {step}: z.shape={z.shape}, logits.shape={logits.shape}, loss={loss.item():.4f}")
+
+
+    
+    print("----------FUSION MODEL STUFF----------")
+    # Given batches [B, d_img] from image encoder, batch = row = set of examples
+    # Given batches [B, d_txt] from text encoder
+    # Given batches y_multi [B, 13] disease labels
 
 
 training_tests()
