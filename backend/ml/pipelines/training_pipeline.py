@@ -519,10 +519,54 @@ class FusionTransformerModel(nn.Module):
             nn.Linear(self.d_fuse_hidden, self.h_dec * self.n_cond),    
             nn.GELU(), 
         )
+    
+    # helper make encder-otupts for T5 from fused vector.
+    # input z_fuse: [B, d_fuse_hidden]
+    def _make_encoder_outputs(self,z_fuse):
+        B = z_fuse.size(0)
+        cond = self.cond_proj(z_fuse)                  # [B, K*H_dec]
+        cond = cond.view(B, self.n_cond, self.h_dec)   # [B, K, H_dec]
+        return BaseModelOutput(last_hidden_state=cond) # attention mask of ones will be inferred if omitted
 
+    # forward pass of pre-trained-transformer
+    # z-img: image emebeddings batch fron cnn-image-encoder, [B, d_img]
+    # z-txt: text embeddings fbatch from text-imageencoder, [B, d_txt]
+    # report_input_ids: token IDs for the decoder, ex [PAD] -> 0
+    def forward_pass(self, z_img, z_txt, report_input_ids, report_attention_mask, report_labels):
+        # concatenate the givven image/text batch embeddings into a single fused vector per example
+        z = torch.cat([z_img, z_txt], dim=-1) # shape [B, d_img + d_txt]
 
+        # pass through all mlp to get cleaned representation z-fuse
+        z_fuse = self.fusion_mlp(z)     # shape [B, d_fuse_hidden]
 
+        # pass z-fuse through disease-head layer, train with BCEWithLogitsLoss, output of disease-head
+        disease_logits = self.disease_head(z_fuse)  # [B, n_disease]
 
+        gen = None
+        if (report_input_ids is not None) or (report_labels is not None):
+            # turns [B, d_use_hidden] into K conditing tokesn [B, K, H_dec] that act like T5s-tranformer-encoder output, we are conditioning the decoder on the fused signal.
+            enc_out = self._make_encoder_outputs(z_fuse)    # [B, K, H_dec]
+
+            # calls the pretrained-transformer-T5 and feeds 
+            gen = self.report_model(
+                encoder_outputs=enc_out,     #  synthetic “encoder tokens”: [B, K, H_dec]
+                labels=report_labels,        # [B, L]
+                return_dict=True,
+            )
+
+        return {
+            "z_fuse": z_fuse,                     # [B, d_fuse_hidden]
+            "disease_logits": disease_logits,     # [B, n_disease]
+            "gen": gen,                           # HF output or None
+        }
+
+    # turns off gradients for everything insdie for inference-only
+    @torch.no_grad()
+    def generate(self, z_img: torch.Tensor, z_txt: torch.Tensor, **gen_kwargs):
+        z = torch.cat([z_img, z_txt], dim=-1)   # concat inputs like above
+        z_fuse = self.fuse_mlp(z)               # pass through mlp
+        enc_out = self._make_encoder_outputs(z_fuse)    # projects into k conditioning tokens like above
+        return self.report_model.generate(encoder_outputs=enc_out, **gen_kwargs)    # all pre-trained-t5-transformer in generation mode
 
 def training_tests():
     print("----------LOAD FEATURES/LABELS FROM FEATURE STORE HOPSWORKS---------")
