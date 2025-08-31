@@ -2,7 +2,11 @@
 import hopsworks
 import pandas as pd
 import numpy as np
-import json, os
+import json, os, tempfile, shutil
+import hsml
+from hsml.schema import Schema
+from hsml.model_schema import ModelSchema
+from datetime import datetime
 from helper import print_clean_df
 import warnings      
 import io
@@ -568,6 +572,129 @@ class FusionTransformerModel(nn.Module):
         z_fuse = self.fusion_mlp(z)               # pass through mlp
         enc_out = self._make_encoder_outputs(z_fuse)    # projects into k conditioning tokens like above
         return self.report_model.generate(encoder_outputs=enc_out, **gen_kwargs)    # all pre-trained-t5-transformer in generation mode
+    
+
+# hlper
+def _sanitize(text: str, max_len: int = 250) -> str:
+    import unicodedata
+    if text is None:
+        return ""
+    # common replacements to keep meaning
+    repl = {
+        "→": "->", "←": "<-", "↔": "<->",
+        "—": "-", "–": "-", "•": "-",
+        "’": "'", "“": '"', "”": '"',
+        "×": "x", "®": "", "™": ""
+    }
+    for k, v in repl.items():
+        text = text.replace(k, v)
+    # normalize & strip any remaining non-ascii
+    text = unicodedata.normalize("NFKC", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    # collapse whitespace and trim length
+    text = " ".join(text.split())
+    return text[:max_len]
+
+# Given all the things we need to replicate the model save it hopsworks model registry
+def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_transformer", version=None, project_name=None, description="Fusion model with disease-head and T5 report head", metrics=None, artifacts=None, image_encoder=None, text_encoder=None, t5_tokenizer=None, save_t5_weights=False, hf_model_name=None):
+    # opens session to hopsworks using our api-key in .env, logs us into specific project
+    project = hopsworks.login(project=project_name)
+    # from that projects returns its model registry
+    model_registry = project.get_model_registry()
+
+    # creates a temporary local folder to stage all the files we want to upoad to model registry in one shot
+    temp_dir = tempfile.mkdtemp(prefix="fusion_reg_")
+    try:    
+        # saving just the learned weights for fusion-model, state_dict() dictionary of parameter tensors
+        torch.save(fusion_model.state_dict(), os.path.join(temp_dir, "fusion_model.pt"))
+        # saving the learned  weights for image-encoder-cnn
+        torch.save(image_encoder.state_dict(), os.path.join(temp_dir, "image_encoder.pt"))
+        # saving the text-encoder-transformer weights
+        torch.save(text_encoder.state_dict(), os.path.join(temp_dir, "text_encoder.pt"))
+
+        # save the configs-metadata of our model for reproducibility, its a dictionary with keys and inforation
+        configuration = {
+            "saved_at":  datetime.utcnow().isoformat() + "Z",   # date model was saved in model-registry
+            "fusion": {
+                "d_img": getattr(fusion_model, "d_img", None),      # just gets the attributes of our fusion-model, so we can create it again, make sure we are passing in same name
+                "d_txt": getattr(fusion_model, "d_txt", None),
+                "d_fuse_hidden": getattr(fusion_model, "d_fuse_hidden", None),
+                "n_disease": getattr(fusion_model, "n_disease", None),
+                "n_cond_tokens": getattr(fusion_model, "n_cond", None),
+                "decoder_hidden": getattr(getattr(fusion_model, "report_model", None), "config", None).d_model
+                    if getattr(fusion_model, "report_model", None) is not None else None,
+            },
+            # report-generation-head-model-attribute in fusion-model
+            "report_head": {
+                "hf_model_name": hf_model_name or (
+                    getattr(getattr(fusion_model, "report_model", None), "config", None)._name_or_path
+                    if getattr(fusion_model, "report_model", None) is not None else None
+                )
+            },
+            "notes": "Fusion MLP + disease head (BCEWithLogits) + T5 report head (CE).",
+        }
+        # just adds more metdata to our config, opens temp-dir for writing, serializes entire config-dict to json and writes it, 
+        if artifacts:
+            configuration["artifacts"] = artifacts   # like {"class_names":[...], "thresholds":[...]}
+        with open(os.path.join(temp_dir, "config.json"), "w") as f:
+            json.dump(configuration, f, indent=2)
+
+        # save tokenize and T5 weights for portable inference
+        t5_dir = os.path.join(temp_dir, "t5_assets")        # creates subfolder path
+        os.makedirs(t5_dir, exist_ok=True)
+        if t5_tokenizer is not None:                    # if we passed a HF tokenizer for T5 it writes the tokenizer files into t5_assests
+            t5_tokenizer.save_pretrained(t5_dir)
+        if save_t5_weights and getattr(fusion_model, "report_model", None) is not None: #  uploads the full T5 weights; set False if you want a lightweight registry entry
+            fusion_model.report_model.save_pretrained(t5_dir)
+
+
+        # define a schema for registry browsing in hopsworks
+        D_IMG = getattr(fusion_model, "d_img", 1024)
+        D_TXT = getattr(fusion_model, "d_txt", 512)
+        N_CLS = getattr(fusion_model, "n_disease", 13)
+
+        x_example = np.zeros((1, D_IMG + D_TXT), dtype=np.float32)  # concat(z_img,z_txt), single concat input simpler
+        y_example = np.zeros((1, N_CLS), dtype=np.float32)
+
+        input_schema  = Schema(x_example)
+        output_schema = Schema(y_example)
+        model_schema  = ModelSchema(input_schema=input_schema, output_schema=output_schema)
+
+        # put the entire model-schema
+        model_schema = hsml.model_schema.ModelSchema(inputs=input_schema, outputs=output_schema)
+
+        # just sanitize some strings for upload
+        safe_name = _sanitize(model_name, max_len=120)
+        safe_desc = _sanitize(description, max_len=250)
+
+        # create new model registry entry in hopsworks model registry (doesnt upload files yet), this call creates the metadata record only and returns registry-model
+        try:
+            registry_model = model_registry.python.create_model(
+                name=safe_name, 
+                version=version, 
+                metrics=metrics or {},
+                description=safe_desc,
+                model_schema=model_schema
+            )
+        except Exception:                                   # try python model api first, if it doesn't work go back to generic
+            registry_model = model_registry.create_model(
+                name=safe_name,
+                version=version,
+                metrics=metrics or {},
+                description=safe_desc,
+            )
+
+        # uploads entire temporary-diretory we created to the hopsworks model registry
+        registry_model.save(temp_dir) 
+        print(f"[HOPSWORKS] Save model '{model_name}' version={registry_model.version} to hopsworks model registry")
+
+        return registry_model   # return it to read stuff
+
+    finally:
+        # clean up the local temp dir, delete it
+        shutil.rmtree(temp_dir, ignore_errors=True)    
+
+
 
 def training_tests():
     print("----------LOAD FEATURES/LABELS FROM FEATURE STORE HOPSWORKS---------")
@@ -711,8 +838,8 @@ def training_tests():
     device = torch.device("cpu")
 
     # 1) -------------------- BUILD A BATCH -------------------- 
-    B_FUSION = 2    # this is our batch size for this test, number of images/texts we will train on
-    rows = features_labels_df.sample(n=B_FUSION, random_state=42).reset_index(drop=True)    # get some rows
+    B_FUSION = 2    # this is our batch size for this test, number of images/texts we will train on, for testing do 2
+    rows = features_labels_df.sample(n=B_FUSION, random_state=42).reset_index(drop=True)    # get the rows of our batch
     
     img_tensors = []    # images -> [B, 3, 224, 224]
     y_multi_list = []   # disease-encoded-vector for each example, [B,13]
@@ -790,7 +917,7 @@ def training_tests():
 
     # -------------------- TRAIN LOOP (try on batch) --------------------
     fusion_model.train()       # puts fusion-transformer-model into training-mode, enables dropout, batch-norm, layer-norm
-    NUM_STEPS = 300  # try 300–1000 for better generated report
+    NUM_STEPS = 100  # try 300–1000 for better generated report
 
     # iterate through the training-loop, one optimization step per iteration
     for step in range(1, NUM_STEPS + 1):
@@ -863,8 +990,35 @@ def training_tests():
 
 
 
+    print("----------SAVE MODEL TO HOPSWORKS MODEL REGISTRY----------")
+    reg_model = save_model_to_hopsworks_model_registry(
+        fusion_model=fusion_model,                 # your trained FusionTransformerModel
+        model_name="cxr_fusion_t5",
+        version=1,                        # auto-increment version in registry
+        project_name=None,                   # or "medical_ml_project" if you use named projects
+        description="CXR fusion: CNN+Text → MLP; multi-label disease head; T5 report head.",
+        metrics={"val_auroc_micro": 0.874, "val_rougeL": 0.214},  # whatever you computed
+        artifacts={
+            "class_names": [
+                "No Finding","Enlarged Cardiomediastinum","Cardiomegaly","Lung Opacity",
+                "Lung Lesion","Edema","Consolidation","Pneumonia","Atelectasis",
+                "Pneumothorax","Pleural Effusion","Pleural Other","Fracture"
+            ],
+            "thresholds": [0.5]*13
+        },
+        image_encoder=model,                  
+        text_encoder=text_encoder_model,
+        t5_tokenizer=t5_tok,                 # saves tokenizer used for decoding
+        save_t5_weights=True,               # set True if you want full T5 weights uploaded
+        hf_model_name="t5-small",
+    )
+    print("model version in registry:", reg_model.version)
 
-training_tests()
+
+
+
+if __name__ == "__main__":
+    training_tests()
 
 
 

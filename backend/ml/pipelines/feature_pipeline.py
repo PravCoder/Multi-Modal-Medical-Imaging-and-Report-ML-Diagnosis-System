@@ -81,5 +81,7 @@ def tests():
     # Images stored in S3, dataset sotred in hopsworks
 
 
-tests()
+if __name__ == "__main__":
+
+    tests()
 
