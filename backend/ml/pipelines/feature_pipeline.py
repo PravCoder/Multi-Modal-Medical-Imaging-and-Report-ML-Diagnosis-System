@@ -78,6 +78,8 @@ def tests():
     print("\n---------SAVE CLEANED RAW DATA TO HOPSWORKS FEATURE STORE---------")
     save_cleaned_raw_data_to_feature_store(cleaned_raw_data_df)
 
+    # Images stored in S3, dataset sotred in hopsworks
+
 
 tests()
 

@@ -22,6 +22,7 @@ from torch.nn import BCEWithLogitsLoss
 from transformers import AutoTokenizer, AutoModel, AutoConfig      # for text-encoder: pip install transformers torch
 from transformers import T5ForConditionalGeneration                 # for fusion model
 from transformers.modeling_outputs import BaseModelOutput           # for fusion model
+from transformers import T5Tokenizer                                # for fusion model
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -288,7 +289,7 @@ class ImageEncoderCNN(nn.Module):
 # Text Encoder
 # ===========================================================
 
-# tokenize input means to convert raw text into sequence on number so transformer can understand. 
+# tokenize input means to convert raw text into sequence of numbers so transformer can understand. 
 # create tokenizer-class from transformers-torch library based on the model-name provided.
 # from-pretrained loads the tokenizer files from HF hub for bert so the text is split into same token-ids that the model expects
 tokenizer = AutoTokenizer.from_pretrained(TEXT_ENCODER_MODEl_NAME)
@@ -478,8 +479,8 @@ class TextEncoderTransformer(nn.Module):
 # for each example takes in image/text embeddings -> MLP -> heads (disease-classification-head, report-generation-head)
 class FusionTransformerModel(nn.Module):
 
-    def __init__(self, d_img, d_txt, d_fuse_hidden, n_disease=13, model_name="t5-small", n_cond_tokens=4, dropout=0.1):
-        super().__init()
+    def __init__(self, d_img, d_txt, d_fuse_hidden=1024, n_disease=13, model_name="t5-small", n_cond_tokens=4, dropout=0.1):
+        super().__init__()
         self.d_img = d_img  # embedding size of image-vector output of image-encoder
         self.d_txt = d_txt  # embedding size of text-vector output of text-encoder
         self.d_fuse_hidden = d_fuse_hidden      # hidden width inside fusion mlp
@@ -498,7 +499,7 @@ class FusionTransformerModel(nn.Module):
             nn.Linear(self.d_fuse, self.d_fuse_hidden),     # projects the features from size [D, d_fuse] -> [B, d_fuse_hidden], the 2 inputs mea (size of each input smaple, size of each output sample)
             nn.GELU(),                                      # nonlineraity
             nn.Dropout(dropout),                            # regularization
-            nn.Layernorm(self.d_fuse_hidden),               # per-example feature normalization
+            nn.LayerNorm(self.d_fuse_hidden),               # per-example feature normalization
         )
 
         # creates disease-head as a linear-learnable-layer that maps the fused-vector to per-disease-scores logits, (input-size, output-size)
@@ -531,8 +532,8 @@ class FusionTransformerModel(nn.Module):
     # forward pass of pre-trained-transformer
     # z-img: image emebeddings batch fron cnn-image-encoder, [B, d_img]
     # z-txt: text embeddings fbatch from text-imageencoder, [B, d_txt]
-    # report_input_ids: token IDs for the decoder, ex [PAD] -> 0
-    def forward_pass(self, z_img, z_txt, report_input_ids, report_attention_mask, report_labels):
+    # report_input_ids: token IDs for the decoder, ex "hi" -> 0, a token-id is an integer representing that token in the models vocab
+    def forward(self, z_img, z_txt, report_input_ids: torch.Tensor | None = None, report_attention_mask: torch.Tensor | None = None, report_labels: torch.Tensor | None = None):
         # concatenate the givven image/text batch embeddings into a single fused vector per example
         z = torch.cat([z_img, z_txt], dim=-1) # shape [B, d_img + d_txt]
 
@@ -562,9 +563,9 @@ class FusionTransformerModel(nn.Module):
 
     # turns off gradients for everything insdie for inference-only
     @torch.no_grad()
-    def generate(self, z_img: torch.Tensor, z_txt: torch.Tensor, **gen_kwargs):
+    def generate(self, z_img, z_txt, **gen_kwargs):
         z = torch.cat([z_img, z_txt], dim=-1)   # concat inputs like above
-        z_fuse = self.fuse_mlp(z)               # pass through mlp
+        z_fuse = self.fusion_mlp(z)               # pass through mlp
         enc_out = self._make_encoder_outputs(z_fuse)    # projects into k conditioning tokens like above
         return self.report_model.generate(encoder_outputs=enc_out, **gen_kwargs)    # all pre-trained-t5-transformer in generation mode
 
@@ -581,66 +582,66 @@ def training_tests():
     print(f"image bytes object: {image_bytes_obj[0:5]}")
 
     print("----------IMAGE ENCODER: IMAGE TRANSFORM TEST SINGLE IMAGE----------")
-    # pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert image-bytes into pil-img-obj
-    # tensor_img = image_transfom_into_tensor(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
-    # print(tensor_img.shape)  # should be [3, 224, 224], [3, img_sze, img_sze], check image-size constant
-    # print(tensor_img.dtype) 
+    pil_img = Image.open(io.BytesIO(image_bytes_obj))       # convert image-bytes into pil-img-obj
+    tensor_img = image_transfom_into_tensor(pil_img)                    # convert pil-img into tensor format to be fed into cnn image encoder
+    print(tensor_img.shape)  # should be [3, 224, 224], [3, img_sze, img_sze], check image-size constant
+    print(tensor_img.dtype) 
 
     print("----------IMAGE ENCODER: CONSTRUCT IMAGE-CXR-TORCH-DATASET----------")
-    # img_s3_key_inputs, disease_classification_vectors_labels = construct_input_label_pairs_for_image_encoder_dataset(features_labels_df)    # pass in df we loaded from feature-store
-    # assert(len(img_s3_key_inputs) == len(disease_classification_vectors_labels))
-    # dataset = CXR_ImageDataset(img_s3_keys_input=img_s3_key_inputs, bucket=os.getenv("AWS_S3_BUCKET_NAME"), labels=disease_classification_vectors_labels, image_transform=image_transfom_into_tensor)
-    # dataloader = DataLoader(dataset, batch_size=32, shuffle=True )   # create dataloader object
-    # print(f"dataset length: {len(dataset)}")
+    img_s3_key_inputs, disease_classification_vectors_labels = construct_input_label_pairs_for_image_encoder_dataset(features_labels_df)    # pass in df we loaded from feature-store
+    assert(len(img_s3_key_inputs) == len(disease_classification_vectors_labels))
+    dataset = CXR_ImageDataset(img_s3_keys_input=img_s3_key_inputs, bucket=os.getenv("AWS_S3_BUCKET_NAME"), labels=disease_classification_vectors_labels, image_transform=image_transfom_into_tensor)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True )   # create dataloader object
+    print(f"dataset length: {len(dataset)}")
 
-    # for batch_imgs, batch_labels in dataloader:     # iterate for all batches in dataloader, it calls __getitem__ & __len__ in the abckground while doing this to fetch examples by index
-    #     print(f"batch img input shape: {batch_imgs.shape}")  # [32, 3, 224, 224], 32=batch-sizes, [B, 3, H, W]
-    #     print(f"batch disease-vec label shape: {batch_labels.shape}")  # [32, 14], [batch, disease-classification]
-    #     print(f"img one example shape: {batch_imgs[0].shape}")          # [3, 244, 244]
-    #     print(f"disease-vec one example value: {batch_labels[0]}")
-    #     break
+    for batch_imgs, batch_labels in dataloader:     # iterate for all batches in dataloader, it calls __getitem__ & __len__ in the abckground while doing this to fetch examples by index
+        print(f"batch img input shape: {batch_imgs.shape}")  # [32, 3, 224, 224], 32=batch-sizes, [B, 3, H, W]
+        print(f"batch disease-vec label shape: {batch_labels.shape}")  # [32, 14], [batch, disease-classification]
+        print(f"img one example shape: {batch_imgs[0].shape}")          # [3, 244, 244]
+        print(f"disease-vec one example value: {batch_labels[0]}")
+        break
 
     print("---------IMAGE ENCODER: CREATE IMAGE-ENCODER-CLASS----------")
-    # device = torch.device("cpu")
-    # model = ImageEncoderCNN(backbone_name="resnet50", d_img=1024, n_disease_classes=13).to(device)
-    # criterion = BCEWithLogitsLoss() 
+    device = torch.device("cpu")
+    model = ImageEncoderCNN(backbone_name="resnet50", d_img=1024, n_disease_classes=13).to(device)
+    criterion = BCEWithLogitsLoss() 
 
     # Phase 1: freeze backbone, train heads
     print("=====Phase #1=====")
-    # model.freeze_backbone()
-    # optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
-    # # iterate every batch of images/labels in dataloader
-    # # where imgs: [B, 3, 224, 224], [32, 3, 224, 224], each element in batch is tensor representing image
-    # # where y: [B, 13], [32, 13]
-    # for imgs, y in dataloader:                    # passing in our data which fine-tunes it
-    #     imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
-    #     optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
-    #     out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
-    #     logits = out["logits"]  # pulls classification logits [B, 13]
-    #     loss = criterion(logits, y) # computes loss given logits & labels
-    #     loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
-    #     optim.step()                # updates params using optimizer with current gradients
+    model.freeze_backbone()
+    optim = model.build_optimizer(phase=1, lr_head=5e-4, weight_decay=1e-2)
+    # iterate every batch of images/labels in dataloader
+    # where imgs: [B, 3, 224, 224], [32, 3, 224, 224], each element in batch is tensor representing image
+    # where y: [B, 13], [32, 13]
+    for imgs, y in dataloader:                    # passing in our data which fine-tunes it
+        imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
+        optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
+        out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
+        logits = out["logits"]  # pulls classification logits [B, 13]
+        loss = criterion(logits, y) # computes loss given logits & labels
+        loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
+        optim.step()                # updates params using optimizer with current gradients
 
-    #     print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img]
-    #     print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
-    #     break
+        print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img]
+        print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
+        break
 
     # Phase 2: unfreeze + discriminative lrs
     print("=====Phase #2=====")
-    # model.unfreeze_backbone()
-    # optim = model.build_optimizer(phase=2, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2)
-    # for imgs, y in dataloader:                    # passing in our data which fine-tunes it
-    #     imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
-    #     optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
-    #     out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
-    #     logits = out["logits"]  # pulls classification logits [B, 13]
-    #     loss = criterion(logits, y) # computes loss given logits & labels
-    #     loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
-    #     optim.step()                # updates params using optimizer with current gradientss
+    model.unfreeze_backbone()
+    optim = model.build_optimizer(phase=2, lr_backbone=1e-4, lr_head=5e-4, weight_decay=1e-2)
+    for imgs, y in dataloader:                    # passing in our data which fine-tunes it
+        imgs = imgs.to(device); y = y.to(device)  # move both tensors to same compute device
+        optim.zero_grad()       # clears old gradients stored in optimizer from previous step (otherwise they accumulate)
+        out = model(imgs)       # runs forward pass on entire image-encoder pass in cur-imgs batch, out["embeddings"] [B, d_img] where each element is embedding-vector for image
+        logits = out["logits"]  # pulls classification logits [B, 13]
+        loss = criterion(logits, y) # computes loss given logits & labels
+        loss.backward()             # backpropagates computes dloss/dtheta for all traiable params that participated in forward pass, heads only in Phase-1; heads + unfrozen backbone in Phase-2
+        optim.step()                # updates params using optimizer with current gradientss
 
-    #     print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img], each element in out["eembeddings"] is a embedding-vector representing that im
-    #     print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
-    #     break
+        print("embeddings:", out["embeddings"].shape) # expect [B, 1024], [B, d_img], each element in out["eembeddings"] is a embedding-vector representing that im
+        print("logits:",     out["logits"].shape)     # expect [B, 13], [B, disease-classes]
+        break
     
 
 
@@ -707,6 +708,160 @@ def training_tests():
     # Given batches [B, d_img] from image encoder, batch = row = set of examples
     # Given batches [B, d_txt] from text encoder
     # Given batches y_multi [B, 13] disease labels
+    device = torch.device("cpu")
+
+    # 1) -------------------- BUILD A BATCH -------------------- 
+    B_FUSION = 2    # this is our batch size for this test, number of images/texts we will train on
+    rows = features_labels_df.sample(n=B_FUSION, random_state=42).reset_index(drop=True)    # get some rows
+    
+    img_tensors = []    # images -> [B, 3, 224, 224]
+    y_multi_list = []   # disease-encoded-vector for each example, [B,13]
+    # iterate all rows in batch
+    for _, row in rows.iterrows():
+        # get the image of the rows from s3
+        bkt, ky = parse_s3_url(row["image_url"])        
+        img_bytes = get_image_from_s3(bkt, ky)
+        pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        # convert image into tensor and add it to img-tensors to be fed into image-encdoer
+        img_tensors.append(image_transfom_into_tensor(pil))  # [3,224,224] is an example img-tensors is the batch
+        #  add disease-classification-vector to batch-list
+        y_multi_list.append(np.asarray(row["disease_classification_vector"], dtype=np.float32))     # [B,13]
+
+    # convert images batch into torch tensor,  [B,3,224,224]
+    imgs = torch.stack(img_tensors, dim=0).to(device) 
+    # convert disease-classification-vectors batch into torch tensor,  [B,13]
+    y_multi = torch.tensor(np.stack(y_multi_list), dtype=torch.float32, device=device) 
+
+    # turn patient-details-text -> tokenizer batch dict
+    patient_texts = rows["patient_details"].astype(str).tolist()    # for the patient-details-input-col make sure its a string and turn it into a list
+    # turn each patient-text-example-string into sequence of numbers vector
+    tok_aligned = tokenize_patient_details(patient_texts, max_len=96)
+    tok_aligned = {k: v.to(device) for k, v in tok_aligned.items()}
+
+    # reports -> T5 labels (pad -> -100)
+    t5_name = "t5-small"        # define fusion-transformer-model name
+    t5_tok = T5Tokenizer.from_pretrained(t5_name)       # loads T5 tokenizer with its vocab + special tokens from HF
+
+    # tokenizes batch of report strings into tensors for T5, retunrs dict
+    rep_batch = t5_tok(rows["report"].astype(str).tolist(),  max_length=256, truncation=True, padding="max_length", return_tensors="pt")     # accesses the report-column
+
+    # takees T5-tokenized report IDs [B, 256] and moves them to our compute device
+    report_input_ids = rep_batch["input_ids"].to(device)              # not used, just for building labels
+    # attention mask for those IDs 1=real token, 0=padding also moved to device. Use this to mask out PADs in the labels so loss ignores them
+    report_attn_mask = rep_batch["attention_mask"].to(device)
+    # makes a sperate copy of token IDs to serve as training labels for T5
+    report_labels = report_input_ids.clone()
+    report_labels[report_attn_mask == 0] = -100  # ignore pads in CE loss
+
+    print(f"[FUSION] imgs: {imgs.shape}, y_multi: {y_multi.shape}")
+    print(f"[FUSION] text ids: {tok_aligned['input_ids'].shape}, report labels: {report_labels.shape}")
+
+    # 2) --------------------  GET EMBEDDINGS FOR IMAGE-ENCODER & TEXT-ENCODER ---------------------
+    image_encoder = model.to(device)                # create image-encoder-cnn our class, model created above                  
+    text_encoder = text_encoder_model.to(device)    # create text-encoder-transformer our class, text_encoder_model created above
+    # put models in evaluation mode
+    image_encoder.eval(); 
+    text_encoder.eval()
+
+    # turn off autograd inside the block saves compute
+    with torch.no_grad():
+        # runs the CNN-image-encoder on our batch of images
+        z_img = image_encoder(imgs)["embeddings"]          # [B, 1024] = [B, d_img], z_img means batch
+        z_txt = text_encoder(**tok_aligned)["embeddings"]  # [B, 512] = [B, d_txt], z_txt means batch
+
+    print(f"\n[FUSION] z_img: {z_img.shape}, z_txt: {z_txt.shape}")
+
+    # 3) --------------------  BUILD FUSION MODEL -------------------- 
+
+    # create fusion-tranformer-model specifying the desired image embedding size d_img, text embedding size
+    fusion_model = FusionTransformerModel(d_img=1024, d_txt=512, n_disease=13).to(device)
+    bce = torch.nn.BCEWithLogitsLoss()
+
+    # builds an adam-optimizer with 4 parameter-groups the fusion-mlp, disease-head, z_fuse → K×H_dec projection, report-generation-head
+    optim_fuse = torch.optim.AdamW([
+        {"params": fusion_model.fusion_mlp.parameters(), "lr": 5e-4},     # param groups: larger LR for fusion/cond head, smaller LR for T5
+        {"params": fusion_model.disease_head.parameters(), "lr": 5e-4},
+        {"params": fusion_model.cond_proj.parameters(), "lr": 5e-4},
+        {"params": fusion_model.report_model.parameters(), "lr": 2e-5},
+    ], weight_decay=1e-2)
+
+    use_amp = device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    # -------------------- TRAIN LOOP (try on batch) --------------------
+    fusion_model.train()       # puts fusion-transformer-model into training-mode, enables dropout, batch-norm, layer-norm
+    NUM_STEPS = 300  # try 300–1000 for better generated report
+
+    # iterate through the training-loop, one optimization step per iteration
+    for step in range(1, NUM_STEPS + 1):
+        # cleas all parameter gradients from the previous step
+        optim_fuse.zero_grad(set_to_none=True)
+        #  enable AMP forautomatic mixed precision
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            # forward-pass through fusion-tranformer-model returns dict with report-generation & disease-logits
+            out = fusion_model(
+                z_img=z_img,                  # passing in batch of image-embeddings of size d_img as input in fusion-model
+                z_txt=z_txt,                  # passing in batch of text-embeddings of size d_txt as input in fusion-model
+                report_input_ids=None,            # T5 can compute loss from labels alone
+                report_attention_mask=None,
+                report_labels=report_labels,      # teacher forcing labels for CE loss
+            )
+
+            # take the multi-label logits & compute the classification lloss with BCE,  [B, 13], disease-classification-vetor for every example. in batch
+            logits = out["disease_logits"]     
+            loss_cls = bce(logits, y_multi)
+
+            # grab the generation loss from T5, if generation wasnt run use 0
+            loss_gen = out["gen"].loss if out["gen"] is not None else 0.0
+            loss = loss_cls + 1.0 * loss_gen
+
+        # use AMP's grad scaler to scale the loss & backprop
+        scaler.scale(loss).backward()
+        # gradient clipping to stabilize training & prevent exploding grads
+        torch.nn.utils.clip_grad_norm_(fusion_model.parameters(), 1.0)
+        # unscales grads internally and calls the optimizer parameter update
+        scaler.step(optim_fuse)
+        scaler.update()
+
+        if step % 25 == 0 or step == 1:
+            print(f"[FUSION][train] step {step:04d} | cls={loss_cls.item():.4f}  gen={float(loss_gen):.4f}  total={loss.item():.4f}")
+
+    # 4) -------------------- GENERATION DEMO --------------------
+    fusion_model.eval()
+    # make sure grads are off
+    with torch.no_grad():
+        # calls fusion-tranformer-model to generate report & disease-class-vector
+        # returns a torch-long-tensor of tokenIDs for the genrated reports shape [B, L_gen] = [B, generated-length], then we decode those ids below
+        # here a tokenID = integer index in models vocab, like 2047 for the word smoker
+        gen_ids = fusion_model.generate(
+            z_img, z_txt,           # pass ing image/text embedding batches of size d_img/d_txt as input
+            max_new_tokens=180,     # putting a cap on how much it can generate
+            min_new_tokens=60,      # force at least a few sentences
+            num_beams=4,
+            no_repeat_ngram_size=3,
+            length_penalty=1.0,
+            early_stopping=True,
+            eos_token_id=t5_tok.eos_token_id,
+            pad_token_id=t5_tok.pad_token_id,
+        )
+
+    
+    # no labels at inference, calling the fusion-tranformer-model forward pass without report-labels runs the fusion MLP+disease head skips the T5 loss path and outputs disease-logits
+    out_inf = fusion_model(z_img=z_img, z_txt=z_txt, report_labels=None)  
+    d_logits = out_inf["disease_logits"]          # [B, 13], raw scores (unbounded)
+    d_probs  = torch.sigmoid(d_logits)            # [B, 13] probabilities in [0,1]
+    d_preds  = (d_probs >= 0.5).int()             # [B, 13], 0/1 multi-label vector
+
+    # given gen-ids a tensor of token IDS converts each row of IDS back to text using teh same T5 tokenize
+    gen_texts = t5_tok.batch_decode(gen_ids, skip_special_tokens=True)
+
+    print("[FUSION] Generated reports (sample):")
+    for i, s in enumerate(gen_texts):       # for each generated text print the generated report and disease-classification-vector
+        print(f"\nExample report #{i}: {s}")
+        # print("Disease probs:", d_probs[i].tolist())
+        print("Disease vector:", d_preds[i].tolist())
+
+
 
 
 training_tests()
