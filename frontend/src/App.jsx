@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { api } from "./api";  // our axios api
 import axios from "axios";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import HomePage from "./pages/HomePage.jsx"

@@ -7,7 +7,29 @@ import hsml
 from hsml.schema import Schema
 from hsml.model_schema import ModelSchema
 from datetime import datetime
-from helper import print_clean_df
+# from data_prep.helper import print_clean_df # -- not working
+def print_clean_df(df, num_rows=5, display_head=True, str_length=15):
+    display_df = df.copy()
+    rows = df.shape[0]
+    cols = df.shape[1]
+
+    # Get the columns that contain string data
+    str_cols = display_df.select_dtypes(include=['object']).columns
+    # Truncate string columns
+    for col in str_cols:
+        display_df[col] = display_df[col].astype(str).str.slice(0, str_length) + \
+                          display_df[col].astype(str).str.len().gt(str_length).apply(lambda x: '...' if x else '')
+    # Print the head or tail
+    if display_head:
+        print(display_df.head(num_rows).to_string())
+        print(f"Number of rows: {rows}")
+        print(f"Number of columns: {cols}")
+    else:
+        print(display_df.tail(num_rows).to_string())
+        print(f"Number of rows: {rows}")
+        print(f"Number of columns: {cols}")
+
+
 import warnings      
 import io
 from PIL import Image
@@ -1017,7 +1039,7 @@ def training_tests():
         gen_ids = fusion_model.generate(
             z_img, z_txt,           # pass ing image/text embedding batches of size d_img/d_txt as input
             max_new_tokens=180,     # putting a cap on how much it can generate
-            min_new_tokens=60,      # force at least a few sentences
+            min_new_tokens=150,      # force at least a few sentences
             num_beams=4,
             no_repeat_ngram_size=3,
             length_penalty=1.0,

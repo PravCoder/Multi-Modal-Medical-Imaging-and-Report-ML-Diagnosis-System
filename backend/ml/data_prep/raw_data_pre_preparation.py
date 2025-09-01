@@ -313,6 +313,8 @@ def prepare_and_save_raw_data():
 
     print("DONE...Uploading Raw Data to S3.")   # view uploaded data in a online parquet viwer just download it from s3
 
+    # WARNING: make sure if you run this ti doesnt create duplicates in S3
+
 prepare_and_save_raw_data()
 
 

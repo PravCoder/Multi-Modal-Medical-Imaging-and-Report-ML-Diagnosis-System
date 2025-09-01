@@ -1,15 +1,28 @@
+# RUN SCRIPT IMPORTS: make sure your are in root project
+# import os, io, json, torch
+# import numpy as np
+# from typing import Dict, List
+# from PIL import Image
+# import hopsworks
+# from transformers import AutoTokenizer
+# from training_pipeline import ImageEncoderCNN
+# from training_pipeline import TextEncoderTransformer
+# from training_pipeline import FusionTransformerModel
+# from training_pipeline import image_transfom_into_tensor, tokenize_patient_details
+# from training_pipeline import parse_s3_url, get_image_from_s3
+
+# RUN APP IMPORTS: make sure your are in backend
 import os, io, json, torch
 import numpy as np
 from typing import Dict, List
 from PIL import Image
 import hopsworks
 from transformers import AutoTokenizer
-
-from training_pipeline import ImageEncoderCNN
-from training_pipeline import TextEncoderTransformer
-from training_pipeline import FusionTransformerModel
-from training_pipeline import image_transfom_into_tensor, tokenize_patient_details
-from training_pipeline import parse_s3_url, get_image_from_s3
+from .training_pipeline import ImageEncoderCNN
+from .training_pipeline import TextEncoderTransformer
+from .training_pipeline import FusionTransformerModel
+from .training_pipeline import image_transfom_into_tensor, tokenize_patient_details
+from .training_pipeline import parse_s3_url, get_image_from_s3
 
 
 # given a model-registry & model-name findslatest version in model in that registry
@@ -165,8 +178,8 @@ def inference(model_bundle, image_pil, patient_details, device=None, gen_kwargs=
     vector = (probs >= thresholds).int().tolist()
     
     # ----- Report generatio output -----
-    # list some attributes for generation
-    gen_attributes = dict(max_new_tokens=180, min_new_tokens=60, num_beams=4, no_repeat_ngram_size=3,length_penalty=1.1, early_stopping=True,eos_token_id=t5_tok.eos_token_id, pad_token_id=t5_tok.pad_token_id)
+    # list some attributes for generation, min number of tokens we want
+    gen_attributes = dict(max_new_tokens=180, min_new_tokens=150, num_beams=4, no_repeat_ngram_size=3,length_penalty=1.1, early_stopping=True,eos_token_id=t5_tok.eos_token_id, pad_token_id=t5_tok.pad_token_id)
     if gen_kwargs: gen_attributes.update(gen_kwargs)
     # call fusion-model generate-func pass ing image-embedding from image-encoder, text-embedding from text-emcoder
     # returns T5 tokenizer tokens IDs for each token in the generated text from the T5 tokenizer, [1, L_gen]
