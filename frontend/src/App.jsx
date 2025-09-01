@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
-import axios from 'axios';
+import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import HomePage from "./pages/HomePage.jsx"
 
 function App() {
   const [data, setData] = useState([]);
@@ -16,10 +18,18 @@ function App() {
 
   return (
     <div>
-      <h1>Django + React + PostgreSQL</h1>
+      {/* <h1>Django + React + PostgreSQL</h1>
       <ul>
         {data.map((item, i) => <li key={i}>{item.name}</li>)}
-      </ul>
+      </ul> */}
+      <BrowserRouter>
+        <Routes>
+
+          <Route path="/" element={<HomePage />}/>
+
+
+        </Routes>
+      </BrowserRouter>
     </div>
   );
 }
