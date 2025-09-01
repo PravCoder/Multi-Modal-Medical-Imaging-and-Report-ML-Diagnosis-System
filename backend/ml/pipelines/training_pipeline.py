@@ -27,6 +27,7 @@ from transformers import AutoTokenizer, AutoModel, AutoConfig      # for text-en
 from transformers import T5ForConditionalGeneration                 # for fusion model
 from transformers.modeling_outputs import BaseModelOutput           # for fusion model
 from transformers import T5Tokenizer                                # for fusion model
+from transformers import T5Config, T5ForConditionalGeneration
 from dotenv import load_dotenv
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)     # supress hopsworks warings for now caution!
@@ -483,7 +484,7 @@ class TextEncoderTransformer(nn.Module):
 # for each example takes in image/text embeddings -> MLP -> heads (disease-classification-head, report-generation-head)
 class FusionTransformerModel(nn.Module):
 
-    def __init__(self, d_img, d_txt, d_fuse_hidden=1024, n_disease=13, model_name="t5-small", n_cond_tokens=4, dropout=0.1):
+    def __init__(self, d_img, d_txt, d_fuse_hidden=1024, n_disease=13, model_name="t5-small", n_cond_tokens=4, dropout=0.1, init_t5_from_config=None, t5_assets_dir=None):
         super().__init__()
         self.d_img = d_img  # embedding size of image-vector output of image-encoder
         self.d_txt = d_txt  # embedding size of text-vector output of text-encoder
@@ -524,6 +525,18 @@ class FusionTransformerModel(nn.Module):
             nn.Linear(self.d_fuse_hidden, self.h_dec * self.n_cond),    
             nn.GELU(), 
         )
+
+        # you saved weights → load them
+        if t5_assets_dir:  
+            self.report_model = T5ForConditionalGeneration.from_pretrained(t5_assets_dir)
+        # no weights saved → avoid large download
+        elif init_t5_from_config:  
+            cfg = T5Config.from_pretrained(model_name)  # small JSON only
+            self.report_model = T5ForConditionalGeneration(cfg)  # no weights yet
+        # fallback (downloads weights) — only if you really want this path, does same as above
+        else:
+            self.report_model = T5ForConditionalGeneration.from_pretrained(model_name)
+        
     
     # helper make encder-otupts for T5 from fused vector.
     # input z_fuse: [B, d_fuse_hidden]
@@ -594,6 +607,13 @@ def _sanitize(text: str, max_len: int = 250) -> str:
     # collapse whitespace and trim length
     text = " ".join(text.split())
     return text[:max_len]
+def _safe_attr(obj, path, default=None): # helper
+    cur = obj
+    for p in path.split("."):
+        cur = getattr(cur, p, None)
+        if cur is None:
+            return default
+    return cur
 
 # Given all the things we need to replicate the model save it hopsworks model registry
 def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_transformer", version=None, project_name=None, description="Fusion model with disease-head and T5 report head", metrics=None, artifacts=None, image_encoder=None, text_encoder=None, t5_tokenizer=None, save_t5_weights=False, hf_model_name=None):
@@ -604,6 +624,17 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
 
     # creates a temporary local folder to stage all the files we want to upoad to model registry in one shot
     temp_dir = tempfile.mkdtemp(prefix="fusion_reg_")
+
+    # gets the bert tokenizer name attribute from text-encoder-obj, image-encoer + text-encoder are passed args above
+    bert_name = (
+        getattr(text_encoder, "model_name", None) or
+        _safe_attr(text_encoder, "encoder.config._name_or_path", "bert-base-uncased")
+    )
+    # gets teh backbone-cnn-model-name attribute from image-encoder-obj
+    image_backbone = (
+        getattr(image_encoder, "backbone_name", None) or
+        type(getattr(image_encoder, "backbone", image_encoder)).__name__ if image_encoder is not None else None
+    )
     try:    
         # saving just the learned weights for fusion-model, state_dict() dictionary of parameter tensors
         torch.save(fusion_model.state_dict(), os.path.join(temp_dir, "fusion_model.pt"))
@@ -631,7 +662,21 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
                     if getattr(fusion_model, "report_model", None) is not None else None
                 )
             },
+            "text_encoder": {                   
+                "hf_model_name": bert_name,
+                "d_txt": getattr(fusion_model, "d_txt", None),
+                "pooling": getattr(text_encoder, "pooling", "masked_mean"),
+                "max_len": 96,                   
+            },
+            "image_encoder": {                    # (optional but helpful)
+                "backbone": image_backbone,
+                "d_img": getattr(fusion_model, "d_img", None),
+                "img_size": 224,
+                "normalize": {"mean":[0.485,0.456,0.406], "std":[0.229,0.224,0.225]},
+            },
+
             "notes": "Fusion MLP + disease head (BCEWithLogits) + T5 report head (CE).",
+
         }
         # just adds more metdata to our config, opens temp-dir for writing, serializes entire config-dict to json and writes it, 
         if artifacts:
@@ -640,6 +685,7 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
             json.dump(configuration, f, indent=2)
 
         # save tokenize and T5 weights for portable inference
+        # If save_t5_weights=FALSE. The FusionTransformerModel includes self.report_model (T5) as a submodule. Therefore, the T5 weights are inside fusion_model.pt (state_dict captures submodules).
         t5_dir = os.path.join(temp_dir, "t5_assets")        # creates subfolder path
         os.makedirs(t5_dir, exist_ok=True)
         if t5_tokenizer is not None:                    # if we passed a HF tokenizer for T5 it writes the tokenizer files into t5_assests
@@ -684,7 +730,7 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
                 description=safe_desc,
             )
 
-        # uploads entire temporary-diretory we created to the hopsworks model registry
+        # uploads entire temporary-diretory we created to the hopsworks model registry, go to hopsworks project -> model registry -> to see all the files we uploaded
         registry_model.save(temp_dir) 
         print(f"[HOPSWORKS] Save model '{model_name}' version={registry_model.version} to hopsworks model registry")
 
@@ -979,7 +1025,7 @@ def training_tests():
     d_probs  = torch.sigmoid(d_logits)            # [B, 13] probabilities in [0,1]
     d_preds  = (d_probs >= 0.5).int()             # [B, 13], 0/1 multi-label vector
 
-    # given gen-ids a tensor of token IDS converts each row of IDS back to text using teh same T5 tokenize
+    # given gen-ids a tensor of token IDS converts each row of IDS back to text using the same T5 tokenize
     gen_texts = t5_tok.batch_decode(gen_ids, skip_special_tokens=True)
 
     print("[FUSION] Generated reports (sample):")
@@ -993,8 +1039,10 @@ def training_tests():
     print("----------SAVE MODEL TO HOPSWORKS MODEL REGISTRY----------")
     reg_model = save_model_to_hopsworks_model_registry(
         fusion_model=fusion_model,                 # your trained FusionTransformerModel
-        model_name="cxr_fusion_t5",
-        version=1,                        # auto-increment version in registry
+        text_encoder=text_encoder,                  # trained text-tranfrormer-model
+        image_encoder=image_encoder,                # trained image-cnn-model
+        model_name="fusion_model_T5",
+        # version=1,                        # auto-increment version in registry, if not passed
         project_name=None,                   # or "medical_ml_project" if you use named projects
         description="CXR fusion: CNN+Text → MLP; multi-label disease head; T5 report head.",
         metrics={"val_auroc_micro": 0.874, "val_rougeL": 0.214},  # whatever you computed
@@ -1006,10 +1054,10 @@ def training_tests():
             ],
             "thresholds": [0.5]*13
         },
-        image_encoder=model,                  
-        text_encoder=text_encoder_model,
+        # image_encoder=model,                  
+        # text_encoder=text_encoder_model,
         t5_tokenizer=t5_tok,                 # saves tokenizer used for decoding
-        save_t5_weights=True,               # set True if you want full T5 weights uploaded
+        save_t5_weights=False,               # set True if you want full T5 weights uploaded, false if you dont for lightweight upload
         hf_model_name="t5-small",
     )
     print("model version in registry:", reg_model.version)
