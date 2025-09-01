@@ -282,7 +282,7 @@ class ImageEncoderCNN(nn.Module):
     # returns dict with embeddings and if enabled logits for disease labels
     def forward(self, images):
         z = self.encode(images)         # call encode func which returns mebeddings for every image [B, d_img]
-        out = {"embeddings": z}         # dict with ebeding key and z value
+        out = {"embeddings": z}         # dict with embedding key and z value
         if self.classifier is not None:
             out["logits"] = self.classifier(z)   # [B, n_disease]
         return out
@@ -301,6 +301,14 @@ tokenizer = AutoTokenizer.from_pretrained(TEXT_ENCODER_MODEl_NAME)
 
 # takes in list of strings, where each string is a patient-detail, of length B the batch-size, pad every sequence
 # returns dict of tensors suitable for model
+# Adds special tokens (e.g., [CLS] … [SEP] for BERT).
+# Splits into subword tokens (not whole words).
+# Maps tokens → IDs (input_ids).
+# Truncates to max_len (e.g., 96) if too long.
+# Pads shorter sequences to exactly max_len with the PAD token.
+# Builds an attention mask (1 for real tokens, 0 for padding).
+# Returns PyTorch tensors (because return_tensors="pt").
+# For a single string batch size 1 you get: input_ids: shape [1, max_len]
 def tokenize_patient_details(text_list, max_len=96):
 
     # call the tokenizer we created, passing the list of texts, if a string would exceed max-len then cut it off so shapes of each string are [B, seq-len], each token is a sub-word so 96 tokens is approzimately 65 worxs
@@ -584,7 +592,7 @@ class FusionTransformerModel(nn.Module):
         z = torch.cat([z_img, z_txt], dim=-1)   # concat inputs like above
         z_fuse = self.fusion_mlp(z)               # pass through mlp
         enc_out = self._make_encoder_outputs(z_fuse)    # projects into k conditioning tokens like above
-        return self.report_model.generate(encoder_outputs=enc_out, **gen_kwargs)    # all pre-trained-t5-transformer in generation mode
+        return self.report_model.generate(encoder_outputs=enc_out, **gen_kwargs)    # returns T5 tokenizer tokens IDs for each token in the generated text from the T5 tokenizer, all pre-trained-t5-transformer in generation mode
     
 
 # hlper

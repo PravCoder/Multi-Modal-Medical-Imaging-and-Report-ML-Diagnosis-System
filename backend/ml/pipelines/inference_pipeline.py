@@ -8,7 +8,8 @@ from transformers import AutoTokenizer
 from training_pipeline import ImageEncoderCNN
 from training_pipeline import TextEncoderTransformer
 from training_pipeline import FusionTransformerModel
-from training_pipeline import image_transfom_into_tensor
+from training_pipeline import image_transfom_into_tensor, tokenize_patient_details
+from training_pipeline import parse_s3_url, get_image_from_s3
 
 
 # given a model-registry & model-name findslatest version in model in that registry
@@ -116,6 +117,76 @@ def load_model_from_hopsworks_model_registry(model_name, version=None, project_n
         "thresholds": thresholds,       # artifact
     }
 
+"""
+Returns:
+      {
+        report_text: str,
+        disease_probs: {class_name: float},
+        disease_vector: [0/1]*13,
+        model_version: int
+      }
+"""
+@torch.no_grad()        
+def inference(model_bundle, image_pil, patient_details, device=None, gen_kwargs=None):
+    if isinstance(device, torch.device):
+        dev = device
+    elif isinstance(device, str):
+        dev = torch.device(device)
+    elif device is None:
+        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        raise TypeError(f"'device' must be str|torch.device|None, got {type(device)}")
+
+
+    # just get the keys from the bundle-dict
+    fusion_nodel = model_bundle["fusion_model"].to(dev)
+    t5_tok = model_bundle["t5_tok"]
+    bert_tok = model_bundle["bert_tok"]
+    class_names = model_bundle["class_names"]
+    thresholds = torch.tensor(model_bundle["thresholds"], device=dev)
+    
+    # get the imagee-encoder-cnn-model & text-encoder-tranfromer-model from bundle
+    image_encoder = model_bundle["image_encoder"].to(dev).eval()
+    text_encoder  = model_bundle["text_encoder"].to(dev).eval()
+
+    # ----- preprocess inputs -----
+    x_img = image_transfom_into_tensor(image_pil).unsqueeze(0) .to(dev)  # transform the image into tensor, add batch dim, [1,3,224,224] [B, RGB, H, W]
+    tok = tokenize_patient_details([patient_details], max_len=96)  # takes in patient-details string and returns dict where ["input_ids"] it spltis the string into tokens and gives each token and ID
+    tok = {k: v.to(dev) for k, v in tok.items()}           # dict of [1,L]
+
+    # ----- Forward pass encoders -----
+    z_img = image_encoder(x_img)["embeddings"]  # calling image-cnn-encoder passing tensor of image-input, returns dict with embedding-key equal to [1, D_img] tensor-embedding representing that image
+    z_txt = text_encoder(**tok)["embeddings"]   # calling text-transformer-encoder passing tokens of patient-details-input, returns dict with embedding-key equal to [1, D_txt] tensor-embedding-vector representing that text, B=1 batch for inference
+
+    # ----- Disease head output  -----
+    out = fusion_nodel(z_img=z_img, z_txt=z_txt, report_labels=None)    # call forward-pass of fusion-model returns logits disease classificaiton vector
+    logits = out["disease_logits"]                              # [1, N]
+    probs  = torch.sigmoid(logits)[0]                           # [N]
+    vector = (probs >= thresholds).int().tolist()
+    
+    # ----- Report generatio output -----
+    # list some attributes for generation
+    gen_attributes = dict(max_new_tokens=180, min_new_tokens=60, num_beams=4, no_repeat_ngram_size=3,length_penalty=1.1, early_stopping=True,eos_token_id=t5_tok.eos_token_id, pad_token_id=t5_tok.pad_token_id)
+    if gen_kwargs: gen_attributes.update(gen_kwargs)
+    # call fusion-model generate-func pass ing image-embedding from image-encoder, text-embedding from text-emcoder
+    # returns T5 tokenizer tokens IDs for each token in the generated text from the T5 tokenizer, [1, L_gen]
+    gen_ids = fusion_nodel.generate(z_img, z_txt, **gen_attributes)  
+    # given gen-ids a tensor of token IDS for that patient-details-string coverts back to text using the same T5 tokenize    
+    report  = t5_tok.batch_decode(gen_ids, skip_special_tokens=True)[0]
+
+    # return dict of outputs
+    return {
+        # generated-text-output
+        "report_text": report,  
+        "disease_probs": {class_names[j]: float(probs[j]) for j in range(len(class_names))},
+        # disease-vector
+        "disease_vector": vector,
+        "model_version": model_bundle["version"],
+    }
+
+    
+
+
 def inference_tests():
     print("\n------------LOAD & RECONSTRUCT MODEL FROM HOPSWORKS MODEL REGISTRY------------")
     MODEL_NAME = "fusion_model_T5"      # check hopsworks
@@ -127,7 +198,17 @@ def inference_tests():
 
 
     print("\n------------INFERENCE (SINGLE or BATCH)------------")
+    # testing with an image in s3, in app user will upload image, we convert to pil-obj and pass to inference pipeline
+    patient_details = "44 year old female PA view , hypertension , cough"
+    image_url = "s3://medical-ml-proj-bucket/chest-x-ray-images/68574aaf-0dd83b.jpg"   
+    bkt, ky = parse_s3_url(image_url)
+    img_bytes = get_image_from_s3(bkt, ky)
+    # PIL-object of image will be the input that the inference gets
+    image_pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
+    output = inference(model_bundle, image_pil, patient_details)
+    print(f"Inference output: {output}")
+    
 
 
 if __name__ == "__main__":
