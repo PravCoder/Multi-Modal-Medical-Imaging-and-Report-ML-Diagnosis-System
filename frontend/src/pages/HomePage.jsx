@@ -191,9 +191,24 @@ const HomePage = () => {
             marginRight: 12,
             padding: "10px 14px",
             borderRadius: 10,
-            border: "1px solid #ccc",
-            background: loadingSample ? "#eee" : "#fafafa",
+            border: "1px solid #4a90e2", // Changed to blue border
+            background: loadingSample ? "#c5d9f1" : "#e6f0fa", // Changed to light blue shades
+            color: "#1a56db", // Changed to blue text
             cursor: loadingSample ? "not-allowed" : "pointer",
+            fontWeight: 500,
+            transition: "all 0.2s ease"
+          }}
+          onMouseOver={(e) => {
+            if (!(loading || loadingSample)) {
+              e.target.style.background = "#d0e1f5";
+              e.target.style.borderColor = "#3b82f6";
+            }
+          }}
+          onMouseOut={(e) => {
+            if (!(loading || loadingSample)) {
+              e.target.style.background = "#e6f0fa";
+              e.target.style.borderColor = "#4a90e2";
+            }
           }}
         >
           {loadingSample ? "Loading sample..." : "Load random sample"}
@@ -250,7 +265,7 @@ const HomePage = () => {
             </div>
 
             <div className="report-section" style={{ marginTop: 24 }}>
-              <h3 style={{ color: colorPalette.darkBlue }}>Radiology Report</h3>
+              <h3 style={{ color: colorPalette.darkBlue }}>Generated Radiology Report</h3>
               <div
                 className="report-content"
                 style={{ background: "#fafafa", border: "1px solid #eee", borderRadius: 8, padding: 16 }}

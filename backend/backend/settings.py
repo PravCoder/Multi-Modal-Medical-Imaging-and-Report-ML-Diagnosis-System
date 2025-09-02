@@ -41,8 +41,14 @@ INSTALLED_APPS = [
     "rest_framework",
     "api",                  # make sure to add  name of django-app
     "corsheaders",          # add corsheaders
+    # "django_cron",      # for automating feautre + training pipelines
 ]
 
+# for automating pipelines
+# CRON_CLASSES = [
+#     "api.cron.FeaturePipelineJob",
+#     "api.cron.TrainingPipelineJob",
+# ]
 
 
 MIDDLEWARE = [

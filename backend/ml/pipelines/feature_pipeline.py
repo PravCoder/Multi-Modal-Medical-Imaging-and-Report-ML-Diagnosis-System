@@ -4,7 +4,28 @@ import numpy as np
 import json
 import hopsworks
 from dotenv import load_dotenv
-from helper import print_clean_df
+# from helper import print_clean_df. # not working dont have time
+def print_clean_df(df, num_rows=5, display_head=True, str_length=15):
+    display_df = df.copy()
+    rows = df.shape[0]
+    cols = df.shape[1]
+
+    # Get the columns that contain string data
+    str_cols = display_df.select_dtypes(include=['object']).columns
+    # Truncate string columns
+    for col in str_cols:
+        display_df[col] = display_df[col].astype(str).str.slice(0, str_length) + \
+                          display_df[col].astype(str).str.len().gt(str_length).apply(lambda x: '...' if x else '')
+    # Print the head or tail
+    if display_head:
+        print(display_df.head(num_rows).to_string())
+        print(f"Number of rows: {rows}")
+        print(f"Number of columns: {cols}")
+    else:
+        print(display_df.tail(num_rows).to_string())
+        print(f"Number of rows: {rows}")
+        print(f"Number of columns: {cols}")
+
 load_dotenv()
 
 
@@ -67,7 +88,7 @@ def save_cleaned_raw_data_to_feature_store(cleaned_df):
 
 
 
-def tests():
+def feature_pipeline_tests():
     
     print("\n---------LOAD SHOW RAW DATA:---------")
     cleaned_raw_data_df = load_raw_data("s3://medical-ml-proj-bucket/raw_data/dataset.parquet")       # make sure this url of where the raw data is in s3 is correct
@@ -83,5 +104,5 @@ def tests():
 
 if __name__ == "__main__":
 
-    tests()
+    feature_pipeline_tests()
 
