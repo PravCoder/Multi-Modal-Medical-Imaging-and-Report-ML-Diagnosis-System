@@ -914,7 +914,8 @@ def training_tests():
     device = torch.device("cpu")
 
     # 1) -------------------- BUILD A BATCH -------------------- 
-    B_FUSION = 2    # this is our batch size for this test, number of images/texts we will train on, for testing do 2
+    B_FUSION = 10    # this is our batch size for this test, number of images/texts we will train on, for testing do 2
+    NUM_STEPS = 300  # try 300–1000 for better generated report, (B=10, S=300) --> 15 mins
     rows = features_labels_df.sample(n=B_FUSION, random_state=42).reset_index(drop=True)    # get the rows of our batch
     
     img_tensors = []    # images -> [B, 3, 224, 224]
@@ -993,7 +994,7 @@ def training_tests():
 
     # -------------------- TRAIN LOOP (try on batch) --------------------
     fusion_model.train()       # puts fusion-transformer-model into training-mode, enables dropout, batch-norm, layer-norm
-    NUM_STEPS = 100  # try 300–1000 for better generated report
+    
 
     # iterate through the training-loop, one optimization step per iteration
     for step in range(1, NUM_STEPS + 1):

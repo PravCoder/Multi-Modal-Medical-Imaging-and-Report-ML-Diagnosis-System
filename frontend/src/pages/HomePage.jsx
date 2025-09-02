@@ -13,6 +13,8 @@ const HomePage = () => {
   const [errorMsg, setErrorMsg] = useState("");
   const fileInputRef = useRef(null);
 
+  const [loadingSample, setLoadingSample] = useState(false);
+
   const colorPalette = {
     black: "#000000",
     darkBlue: "#14213d",
@@ -37,6 +39,13 @@ const HomePage = () => {
   };
 
   const triggerFileInput = () => fileInputRef.current?.click();
+
+  async function base64ToFile(base64, mime, filename) {
+    const res = await fetch(`data:${mime};base64,${base64}`);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: mime });
+  }
+
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -71,6 +80,38 @@ const HomePage = () => {
         setLoading(false);
     }
   };
+
+
+  const handleLoadSample = async () => {
+    setLoadingSample(true);
+    setErrorMsg("");
+    try {
+      const { data } = await api.post("/api/load-sample/"); // POST with no body
+      // data: { image_name, image_mime, image_base64, patient_details }
+
+      // Convert to File so your existing inference flow works
+      const f = await base64ToFile(data.image_base64, data.image_mime, data.image_name);
+      setFile(f);
+
+      // Set preview
+      const reader = new FileReader();
+      reader.onloadend = () => setImagePreview(reader.result);
+      reader.readAsDataURL(f);
+
+      // Fill patient details textbox
+      setPatientDetails(data.patient_details || "");
+    } catch (e) {
+      const msg =
+        e.response?.data?.error ||
+        e.response?.data?.detail ||
+        e.message ||
+        "Failed to load sample.";
+      setErrorMsg(msg);
+    } finally {
+      setLoadingSample(false);
+    }
+  };
+
 
   return (
     <div className="app" style={{ backgroundColor: colorPalette.white, color: colorPalette.black }}>
@@ -114,7 +155,8 @@ const HomePage = () => {
             <textarea
               value={patientDetails}
               onChange={(e) => setPatientDetails(e.target.value)}
-              placeholder="Enter patient history, symptoms, and other relevant information..."
+              placeholder="Enter patient details here: Age and sex, presenting symptoms (onset, duration, severity), relevant medical history (e.g. heart disease, COPD, cancer, smoking), recent surgeries, hospitalizations, or travel, current medications or treatments (oxygen, chemo, etc.), vital signs if available (temp, HR, BP, RR, SpO2), specific question for radiology (e.g. rule out pneumonia, effusion, fracture)
+"
               className="patient-details-textarea"
               rows="6"
               style={{ width: "100%", padding: 12, borderRadius: 8, border: "1px solid #ccc" }}
@@ -139,6 +181,24 @@ const HomePage = () => {
             {loading ? "Processing..." : "Generate Diagnosis"}
           </button>
         </form>
+
+        <button
+          type="button"
+          onClick={handleLoadSample}
+          disabled={loading || loadingSample}
+          style={{
+            marginTop: 8,
+            marginRight: 12,
+            padding: "10px 14px",
+            borderRadius: 10,
+            border: "1px solid #ccc",
+            background: loadingSample ? "#eee" : "#fafafa",
+            cursor: loadingSample ? "not-allowed" : "pointer",
+          }}
+        >
+          {loadingSample ? "Loading sample..." : "Load random sample"}
+        </button>
+
 
         {errorMsg && (
           <div style={{ marginTop: 16, color: "#b00020" }}>
