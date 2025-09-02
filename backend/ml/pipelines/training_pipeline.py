@@ -1,4 +1,5 @@
 # TRAINING PIPELINE: 
+# COMMAND: python backend/ml/pipelines/training_pipeline.py, be in root
 import hopsworks
 import pandas as pd
 import numpy as np
@@ -647,6 +648,10 @@ def _safe_attr(obj, path, default=None): # helper
 
 # Given all the things we need to replicate the model save it hopsworks model registry
 def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_transformer", version=None, project_name=None, description="Fusion model with disease-head and T5 report head", metrics=None, artifacts=None, image_encoder=None, text_encoder=None, t5_tokenizer=None, save_t5_weights=False, hf_model_name=None):
+    from pathlib import Path
+    import os, torch
+    from datetime import datetime
+
     # opens session to hopsworks using our api-key in .env, logs us into specific project
     project = hopsworks.login(project=project_name)
     # from that projects returns its model registry
@@ -743,6 +748,7 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
         safe_name = _sanitize(model_name, max_len=120)
         safe_desc = _sanitize(description, max_len=250)
 
+
         # create new model registry entry in hopsworks model registry (doesnt upload files yet), this call creates the metadata record only and returns registry-model
         try:
             registry_model = model_registry.python.create_model(
@@ -764,11 +770,38 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
         registry_model.save(temp_dir) 
         print(f"[HOPSWORKS] Save model '{model_name}' version={registry_model.version} to hopsworks model registry")
 
+        # -----PICKLE STUFF: SAVE MODEL-BUNDLE LOCALLY AFTER TRAINING-----
+        ML_DIR     = Path(__file__).resolve().parents[1]  # .../backend/ml
+        MODEL_DIR  = ML_DIR / "model"
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+        LATEST = MODEL_DIR / "model_bundle.pt"
+        STAMP  = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        VER    = MODEL_DIR / f"model_bundle_{STAMP}.pt"     # in the model-bundle file will be named "model_bundle_202509T626"
+
+        print("VERSIOOOSOSS: " +str(registry_model.version))
+        bundle = {
+            "cfg": configuration,                           # JSON-safe dict
+            "fusion_state": fusion_model.state_dict(),      # tensors only
+            "image_state":  image_encoder.state_dict(),
+            "text_state":   text_encoder.state_dict(),
+            "t5_tokenizer_name": configuration["report_head"]["hf_model_name"],
+            "bert_tokenizer_name": configuration["text_encoder"]["hf_model_name"],
+            "version":registry_model.version
+        }
+        tmp = LATEST.with_suffix(".pt.tmp")
+        torch.save(bundle, tmp)         # save the newly trained model bundle locally for faster inference without loading from model registry, fixing latency issue
+        os.replace(tmp, LATEST)         # atomic
+        shutil.copyfile(LATEST, VER)
+        print(f"Saved latest: {LATEST}")
+        # -----pICKLE STUFF: SAVE MODEL-BUNDLE LOCALLY AFTER TRAINING-----
+
         return registry_model   # return it to read stuff
 
     finally:
         # clean up the local temp dir, delete it
         shutil.rmtree(temp_dir, ignore_errors=True)    
+
 
 
 
@@ -1096,8 +1129,16 @@ def training_tests():
 
 
 
+
+
+
+
+
+
 if __name__ == "__main__":
     training_tests()
+
+
 
 
 

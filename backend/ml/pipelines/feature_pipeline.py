@@ -1,4 +1,5 @@
 # FEATURE PIPELINE: transforms raw data into ready-to-train features/labels saved in feature store, this just cleans the raw data and saves it in our feature store hopsworks, the training pipeline transforms that into ready-to-train tensors
+# COMMAND: python backend/ml/pipelines/feature_pipeline.py, be in root
 import pandas as pd
 import numpy as np
 import json

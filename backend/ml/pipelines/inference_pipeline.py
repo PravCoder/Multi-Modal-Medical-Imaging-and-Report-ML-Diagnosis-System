@@ -1,4 +1,5 @@
 # RUN SCRIPT IMPORTS: make sure your are in root project
+# COMMAND: python backend/ml/pipelines/inference_pipeline.py, be in root
 # import os, io, json, torch
 # import numpy as np
 # from typing import Dict, List
@@ -10,8 +11,11 @@
 # from training_pipeline import FusionTransformerModel
 # from training_pipeline import image_transfom_into_tensor, tokenize_patient_details
 # from training_pipeline import parse_s3_url, get_image_from_s3
+# from pathlib import Path
+# from datetime import datetime
 
-# RUN APP IMPORTS: make sure your are in backend
+
+# RUN APP IMPORTS: make sure your are in backend. When runnnig app with python3 manage.py rusnerver
 import os, io, json, torch
 import numpy as np
 from typing import Dict, List
@@ -23,6 +27,10 @@ from .training_pipeline import TextEncoderTransformer
 from .training_pipeline import FusionTransformerModel
 from .training_pipeline import image_transfom_into_tensor, tokenize_patient_details
 from .training_pipeline import parse_s3_url, get_image_from_s3
+from pathlib import Path
+from datetime import datetime
+
+
 
 
 # given a model-registry & model-name findslatest version in model in that registry
@@ -219,7 +227,7 @@ def inference_tests():
     # PIL-object of image will be the input that the inference gets
     image_pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-    output = inference(model_bundle, image_pil, patient_details)
+    output = inference(model_bundle, image_pil, patient_details)    # inference function takes in the model-bundle
     print(f"Inference output: {output}")
     
 

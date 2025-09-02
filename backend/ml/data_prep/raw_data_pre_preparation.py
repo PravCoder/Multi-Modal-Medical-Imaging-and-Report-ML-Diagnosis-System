@@ -1,4 +1,5 @@
 # File: prepares the raw data before it is transformed in the feature pipeline. This is the "pre-preparation" since we do not have a single dataset for our needs. 
+# COMMAND: python backend/ml/data_prep/raw_data_pre_preparation.py, be in root
 from datasets import load_dataset
 from torchvision import transforms
 import matplotlib.pyplot as plt
@@ -27,7 +28,7 @@ def show_basic_info(dataset):
     # First row sample
     sample = dataset[0] 
     print(f"Sample Row: {sample}")  # dict with keys the rows names "image", "findings", "impressions"
-    print(f"Image Shape: {sample["image"].size}")  # (width, height)
+    print(f"Image Shape: {sample['image'].size}")  # (width, height)
 
     # Iterate all images and make sure they can be opened
     for idx, row in enumerate(dataset):
