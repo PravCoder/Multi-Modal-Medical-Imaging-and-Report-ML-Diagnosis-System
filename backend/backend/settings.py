@@ -41,15 +41,30 @@ INSTALLED_APPS = [
     "rest_framework",
     "api",                  # make sure to add  name of django-app
     "corsheaders",          # add corsheaders
-    # "django_cron",      # for automating feautre + training pipelines
 ]
 
-# for automating pipelines
-# CRON_CLASSES = [
-#     "api.cron.FeaturePipelineJob",
-#     "api.cron.TrainingPipelineJob",
-# ]
 
+# ----------CELERY CONFIGURATIONS----------
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    "run-pipeline-one-daily": {
+        "task": "api.tasks.run_daily_feature_pipeline",     # celery-func in tasks.py
+        "schedule": crontab(minute='*/1'),              # runs every day at 2:00 AM,  crontab(hour=2, minute=0), crontab(minute='*/1') runs every minute
+    },
+    "run-pipeline-two-daily": {
+        "task": "api.tasks.run_daily_training_pipeline",    # celery-func in tasks.py
+        "schedule": crontab(minute='*/1'),              # runs every day at 3:00 AM
+    },
+}
+# celery Configuration Options
+# use Redis as the message broker and result backend
+CELERY_BROKER_URL = "redis://localhost:6379/0"  # Local development
+CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+# If you have timezone issues, set the timezone to match Django's
+CELERY_TIMEZONE = "America/New_York"  # Or your timezone, e.g., "UTC"
+# ----------CELERY CONFIGURATIONS----------
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

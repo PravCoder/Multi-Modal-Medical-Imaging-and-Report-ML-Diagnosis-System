@@ -56,7 +56,7 @@ def _get_model_bundle():
 # ------------------------------- ROUTES -------------------------------
 
 
-# Call inference on user subitted image + patient details
+# ROUTE: call inference on user subitted image + patient details
 @api_view(["POST"])
 @parser_classes([MultiPartParser, FormParser, JSONParser])
 def predict_view(request):
@@ -106,15 +106,15 @@ def predict_view(request):
 
 
 
-# Loads random sample route
-try:
-    BASE_DIR = Path(settings.BASE_DIR)
-except Exception:
-    BASE_DIR = Path(__file__).resolve().parents[2] 
-SAMPLE_IMAGES_DIR = Path(os.getenv("sample_images", "sample_images/"))
-SAMPLE_DETAILS_JSON = Path(os.getenv("sample_details", "sample_details/patient_details.json"))
+# ROUTE: Loads random sample 
 @api_view(["POST"])
 def load_random_sample_view(request):
+    try:
+        BASE_DIR = Path(settings.BASE_DIR)
+    except Exception:
+        BASE_DIR = Path(__file__).resolve().parents[2] 
+    SAMPLE_IMAGES_DIR = Path(os.getenv("sample_images", "sample_images/"))
+    SAMPLE_DETAILS_JSON = Path(os.getenv("sample_details", "sample_details/patient_details.json"))
     if not SAMPLE_IMAGES_DIR.exists():
         return Response(
             {"error": f"Images dir not found: {SAMPLE_IMAGES_DIR.resolve()}"},
