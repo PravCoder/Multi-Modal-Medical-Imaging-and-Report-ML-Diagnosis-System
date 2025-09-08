@@ -618,7 +618,7 @@ class FusionTransformerModel(nn.Module):
         return self.report_model.generate(encoder_outputs=enc_out, **gen_kwargs)    # returns T5 tokenizer tokens IDs for each token in the generated text from the T5 tokenizer, all pre-trained-t5-transformer in generation mode
     
 
-# hlper
+# helper
 def _sanitize(text: str, max_len: int = 250) -> str:
     import unicodedata
     if text is None:
