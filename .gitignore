@@ -3,3 +3,5 @@ backend/.env
 backend/ml/data
 backend/ml/model
 backend/venv
+backend/venv13
+backend/venv10
