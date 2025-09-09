@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-e3woi6^+m2r)a^p6pan@ix4ju*y9_1jj5c1o)0gmtb5m7-+)l1'
+SECRET_KEY = "django-insecure-e3woi6^+m2r)a^p6pan@ix4ju*y9_1jj5c1o)0gmtb5m7-+)l1"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -43,28 +43,6 @@ INSTALLED_APPS = [
     "corsheaders",          # add corsheaders
 ]
 
-
-# ----------CELERY CONFIGURATIONS----------
-from celery.schedules import crontab
-CELERY_BEAT_SCHEDULE = {
-    "run-pipeline-one-daily": {
-        "task": "api.tasks.run_daily_feature_pipeline",     # celery-func in tasks.py
-        "schedule": crontab(minute='*/1'),              # runs every day at 2:00 AM,  crontab(hour=2, minute=0), crontab(minute='*/1') runs every minute
-    },
-    "run-pipeline-two-daily": {
-        "task": "api.tasks.run_daily_training_pipeline",    # celery-func in tasks.py
-        "schedule": crontab(minute='*/1'),              # runs every day at 3:00 AM
-    },
-}
-# celery Configuration Options
-# use Redis as the message broker and result backend
-CELERY_BROKER_URL = "redis://localhost:6379/0"  # Local development
-CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
-CELERY_ACCEPT_CONTENT = ["json"]
-CELERY_TASK_SERIALIZER = "json"
-# If you have timezone issues, set the timezone to match Django's
-CELERY_TIMEZONE = "America/New_York"  # Or your timezone, e.g., "UTC"
-# ----------CELERY CONFIGURATIONS----------
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

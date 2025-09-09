@@ -770,7 +770,7 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
         registry_model.save(temp_dir) 
         print(f"[HOPSWORKS] Save model '{model_name}' version={registry_model.version} to hopsworks model registry")
 
-        # -----PICKLE STUFF: SAVE MODEL-BUNDLE LOCALLY AFTER TRAINING-----
+        # --------PICKLE STUFF: SAVE MODEL-BUNDLE LOCALLY AFTER TRAINING--------
         ML_DIR     = Path(__file__).resolve().parents[1]  # .../backend/ml
         MODEL_DIR  = ML_DIR / "model"
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -794,7 +794,7 @@ def save_model_to_hopsworks_model_registry(fusion_model, model_name="fusion_tran
         os.replace(tmp, LATEST)         # atomic
         shutil.copyfile(LATEST, VER)
         print(f"Saved latest: {LATEST}")
-        # -----pICKLE STUFF: SAVE MODEL-BUNDLE LOCALLY AFTER TRAINING-----
+        # --------PICKlE STUFF: SAVE MODEL-BUNDLE LOCALLY AFTER TRAINING--------
 
         return registry_model   # return it to read stuff
 

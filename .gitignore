@@ -2,3 +2,4 @@
 backend/.env
 backend/ml/data
 backend/ml/model
+backend/venv
