@@ -260,3 +260,12 @@ def clear_model_bundle():
     global _BUNDLE
     with _LOCK:
         _BUNDLE = None
+
+
+
+
+# IMPORTANT
+# from django.views.generic import TemplateView
+
+# class ReactAppView(TemplateView):
+#     template_name = 'index.html' 

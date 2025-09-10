@@ -27,5 +27,9 @@ DATABASES = {
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'staticfiles'),
+]
+
 
 # python3 manage.py runserver --settings=your_project_name.production
