@@ -1,14 +1,10 @@
-[build]
-provider = "multi"
-
-[build.python]
-version = "3.10"
-
-[build.node]
-version = "18"
+[project]
+name = "multi-modal-medical-imaging"
 
 [phases.setup]
 cmds = [
+    # explicitly install Node and Python together
+    "nix-env -iA nixpkgs.nodejs-18_x",   # install Node 18
     "cd frontend && npm install",
     "pip install -r backend/requirements.txt"
 ]
