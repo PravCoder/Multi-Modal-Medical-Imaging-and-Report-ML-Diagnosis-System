@@ -28,12 +28,12 @@ STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Add React build files to static files directories
-REACT_BUILD_DIR = os.path.join(BASE_DIR, '../frontend/dist')
+# REACT_BUILD_DIR = os.path.join(BASE_DIR, '../frontend/dist')
 
-STATICFILES_DIRS = [
-    REACT_BUILD_DIR,
-    # Add other static directories if needed
-]
+# STATICFILES_DIRS = [
+#     REACT_BUILD_DIR,
+#     # Add other static directories if needed
+# ]
 
 # Template configuration to serve React's index.html
 TEMPLATES = [
