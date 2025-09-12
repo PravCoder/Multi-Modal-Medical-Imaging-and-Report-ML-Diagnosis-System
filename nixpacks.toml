@@ -1,0 +1,17 @@
+[providers]
+python = "3.10"
+node = "18"
+
+[phases.setup]
+cmds = [
+    "cd frontend && npm install",
+]
+
+[phases.build]
+cmds = [
+    "cd frontend && npm run build",
+    "pip install -r backend/requirements.txt"
+]
+
+[start]
+cmd = "cd backend && python manage.py migrate && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT"
