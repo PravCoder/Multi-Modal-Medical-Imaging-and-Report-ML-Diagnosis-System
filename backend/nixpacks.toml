@@ -1,0 +1,5 @@
+[build]
+provider = "python"
+
+[build.python]
+version = "3.10"

@@ -1,0 +1,5 @@
+[build]
+provider = "node"
+
+[build.node]
+version = "18"
