@@ -1,22 +1,27 @@
-[build]
-provider = "python"
+# nixpacks.toml
 
-[build.python]
-version = "3.10"
+[project]
+name = "multi-modal-medical-imaging"
 
-[build.node]
-version = "18"
-
-[[phases]]
-name = "setup"
-cmds = ["cd frontend && npm install"]
-
-[[phases]]
-name = "build"
+[phases.setup]
+# setup phase installs dependencies
 cmds = [
-    "cd frontend && npm run build",
+    "echo 'Setting up environment...'",
+    "cd frontend && npm install",
     "pip install -r backend/requirements.txt"
 ]
 
+[phases.build]
+# build phase compiles React and collects Django static files
+cmds = [
+    "echo 'Building frontend...'",
+    "cd frontend && npm run build",
+    "echo 'Copying frontend build to Django static folder...'",
+    "mkdir -p backend/static",
+    "cp -r frontend/dist/* backend/static/",
+    "echo 'Running Django migrations...'",
+    "cd backend && python manage.py migrate"
+]
+
 [start]
-cmd = "cd backend && python manage.py migrate && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT"
+cmd = "cd backend && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT"
