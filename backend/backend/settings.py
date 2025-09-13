@@ -29,12 +29,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "fallback-secret-key-for-dev")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = [
-    ".railway.app",
-    "127.0.0.1",
-    # "yourdomain.com",  # in future custom domain
-]
-
+ALLOWED_HOSTS = ['*']
 
 # Application definition
 
