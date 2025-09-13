@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import "../styles/home.css";
-import { api } from "../api";
+import { getApi } from "../api";
 
 
 
@@ -63,8 +63,9 @@ const HomePage = () => {
 
         // IMPORTANT: URL must match Django exactly. If you used path("api/predict/", ...),
         // call "/api/predict/" with the trailing slash.
+        const api = await getApi();
         const { data } = await api.post("/api/predict/", formData, {
-        headers: { "Content-Type": "multipart/form-data" }, // axios sets it, but explicit is fine
+          headers: { "Content-Type": "multipart/form-data" },
         });
 
         // Backend shape: { diseases: [{ name, probability }], report_text: "..." }
@@ -87,7 +88,10 @@ const HomePage = () => {
     setLoadingSample(true);
     setErrorMsg("");
     try {
-      const { data } = await api.post("/api/load-sample/"); // POST with no body
+      const api = await getApi();
+      const { data } = await api.post("/api/load-sample/");
+
+      
       // data: { image_name, image_mime, image_base64, patient_details }
 
       // Convert to File so your existing inference flow works
