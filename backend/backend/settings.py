@@ -27,9 +27,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY", "fallback-secret-key-for-dev")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    "609e486f-69a9-4e02-a4bc-be4260c3d382.e1-us-east-azure.choreoapps.dev",
+    "127.0.0.1",
+    "localhost",
+]
 
 # Application definition
 
