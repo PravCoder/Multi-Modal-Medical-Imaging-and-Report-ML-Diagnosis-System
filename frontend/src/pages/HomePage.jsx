@@ -114,6 +114,8 @@ const HomePage = () => {
   };
 
 
+
+
   return (
     <div className="app" style={{ backgroundColor: colorPalette.white, color: colorPalette.black }}>
       <header className="app-header" style={{ backgroundColor: colorPalette.darkBlue, color: colorPalette.orange }}>
@@ -214,6 +216,8 @@ const HomePage = () => {
         >
           {loadingSample ? "Loading sample..." : "Load random sample"}
         </button>
+
+          
 
 
         {errorMsg && (
