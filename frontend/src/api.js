@@ -17,52 +17,49 @@
 // frontend/src/api.js
 import axios from "axios";
 
-// Detect if we are running locally (VITE_API_URL) or on Choreo
+// Local dev
 const LOCAL_API_URL = import.meta.env.VITE_API_URL;
 
-// Check if Choreo injected configs
+// Choreo injected configs
 const CHOREO_CONFIGS = window?.configs;
 
 let cachedToken = null;
 let tokenExpiry = null;
 
-// 1️⃣ Get OAuth2 token from Choreo if needed
+// Get OAuth2 token from Choreo
 async function getChoreoToken() {
   if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
-    return cachedToken; // reuse token if not expired
+    return cachedToken;
   }
 
   const { apiUrl, consumerKey, consumerSecret, tokenUrl } = CHOREO_CONFIGS;
 
+  const basicAuth = btoa(`${consumerKey}:${consumerSecret}`);
+
   const tokenResponse = await axios.post(
     tokenUrl,
-    new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: consumerKey,
-      client_secret: consumerSecret,
-    }),
+    new URLSearchParams({ grant_type: "client_credentials" }),
     {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
     }
   );
 
   cachedToken = tokenResponse.data.access_token;
-  tokenExpiry = Date.now() + (tokenResponse.data.expires_in - 10) * 1000; // 10s buffer
+  tokenExpiry = Date.now() + (tokenResponse.data.expires_in - 10) * 1000;
 
   return cachedToken;
 }
 
-// 2️⃣ Get an Axios instance
+// Return Axios instance
 export async function getApi() {
   if (LOCAL_API_URL) {
-    // local dev: no auth
-    return axios.create({
-      baseURL: LOCAL_API_URL,
-    });
+    return axios.create({ baseURL: LOCAL_API_URL });
   }
 
   if (CHOREO_CONFIGS) {
-    // deployed on Choreo: use OAuth2 token
     const token = await getChoreoToken();
     return axios.create({
       baseURL: CHOREO_CONFIGS.apiUrl,
