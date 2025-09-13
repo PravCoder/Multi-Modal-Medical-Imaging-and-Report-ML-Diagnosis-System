@@ -114,6 +114,26 @@ const HomePage = () => {
   };
 
 
+  const handleTestApi = async () => {
+    setLoading(true);
+    setErrorMsg("");
+    try {
+        const { data } = await api.get("/api/items/"); // GET request
+        console.log("Items:", data);
+        alert(JSON.stringify(data)); // quick test
+    } catch (e) {
+        const msg =
+            e.response?.data?.error ||
+            e.response?.data?.detail ||
+            e.message ||
+            "Failed to fetch items.";
+        setErrorMsg(msg);
+    } finally {
+        setLoading(false);
+    }
+};
+
+
 
 
   return (
@@ -216,6 +236,10 @@ const HomePage = () => {
         >
           {loadingSample ? "Loading sample..." : "Load random sample"}
         </button>
+
+
+        <button onClick={handleTestApi}>Test GET /api/items/</button>
+
 
           
 
