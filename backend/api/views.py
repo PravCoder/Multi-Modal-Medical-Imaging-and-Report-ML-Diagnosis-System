@@ -109,7 +109,7 @@ def predict_view(request):
 # ROUTE: Loads random sample 
 @api_view(["POST"])
 def load_random_sample_view(request):
-    return Response({"ok": True})
+    # return Response({"ok": True})
     try:
         BASE_DIR = Path(settings.BASE_DIR)
     except Exception:

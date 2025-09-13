@@ -27,15 +27,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY", "fallback-secret-key-for-dev")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = ALLOWED_HOSTS_ENV = os.environ.get("DEBUG")
+DEBUG = os.environ.get("DEBUG")
 
-ALLOWED_HOSTS_ENV = os.environ.get(
-    "ALLOWED_HOSTS",
-    "609e486f-69a9-4e02-a4bc-be4260c3d382.e1-us-east-azure.choreoapps.dev,127.0.0.1,localhost"
-)
-
-# Split string into list, remove empty strings and whitespace
-ALLOWED_HOSTS = [host.strip() for host in ALLOWED_HOSTS_ENV.split(",") if host.strip()]
+ALLOWED_HOSTS = [
+    "609e486f-69a9-4e02-a4bc-be4260c3d382.e1-us-east-azure.choreoapps.dev",
+    "127.0.0.1",
+    "localhost",
+    "*",  # allow all hosts temporarily
+]
 
 
 
