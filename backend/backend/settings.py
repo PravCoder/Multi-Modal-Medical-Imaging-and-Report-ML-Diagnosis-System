@@ -27,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY", "fallback-secret-key-for-dev")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = ALLOWED_HOSTS_ENV = os.environ.get("DEBUG")
 
 ALLOWED_HOSTS_ENV = os.environ.get(
     "ALLOWED_HOSTS",
