@@ -154,7 +154,7 @@ def inference(model_bundle, image_pil, patient_details, device=None, gen_kwargs=
     elif isinstance(device, str):
         dev = torch.device(device)
     elif device is None:
-        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dev = torch.device("cpu")
     else:
         raise TypeError(f"'device' must be str|torch.device|None, got {type(device)}")
 
