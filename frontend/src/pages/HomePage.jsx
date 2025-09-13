@@ -4,6 +4,7 @@ import "../styles/home.css";
 import { api } from "../api";
 
 
+
 const HomePage = () => {
   const [imagePreview, setImagePreview] = useState(null);
   const [file, setFile] = useState(null);

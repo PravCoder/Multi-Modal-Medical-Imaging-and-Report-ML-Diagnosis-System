@@ -6,3 +6,5 @@ backend/venv
 backend/venv13
 backend/venv10
 frontend/dist
+
+frontend/.env
