@@ -36,7 +36,7 @@ ALLOWED_HOSTS = [
     "*",  # allow all hosts temporarily
 ]
 
-
+CORS_ALLOW_ALL_ORIGINS=True
 
 # Application definition
 
