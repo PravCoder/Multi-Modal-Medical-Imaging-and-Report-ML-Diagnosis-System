@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import "../styles/home.css";
 import { getApi } from "../api";
-const api = await getApi();
+
 
 
 const HomePage = () => {
@@ -63,7 +63,7 @@ const HomePage = () => {
 
         // IMPORTANT: URL must match Django exactly. If you used path("api/predict/", ...),
         // call "/api/predict/" with the trailing slash.
-        // const api = await getApi();
+        const api = await getApi();
         const { data } = await api.post("/api/predict/", formData, {
           headers: { "Content-Type": "multipart/form-data" },
         });
@@ -88,7 +88,7 @@ const HomePage = () => {
     setLoadingSample(true);
     setErrorMsg("");
     try {
-      // const api = await getApi();
+      const api = await getApi();
       const { data } = await api.post("/api/load-sample/");
 
       
